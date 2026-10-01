@@ -1,6 +1,7 @@
 #include "d3d11_fence.hpp"
 #include "d3d11_device_child.hpp"
 #include "d3d11_resource.hpp"
+#include "dxmt_native_interop.h"
 #include "util_win32_compat.h"
 
 namespace dxmt {
@@ -93,6 +94,7 @@ CreateFence(MTLD3D11Device *pDevice, UINT64 InitialValue, D3D11_FENCE_FLAG Flags
   bool shared = !!(Flags & (D3D11_FENCE_FLAG_SHARED | D3D11_FENCE_FLAG_SHARED_CROSS_ADAPTER));
   auto event = pDevice->GetMTLDevice().newSharedEvent();
   D3DKMT_HANDLE local_kmt = 0;
+  char mach_port_name[DXMT_NATIVE_SHARE_NAME_SIZE] = {};
   if (shared) {
     if (!(pDevice->GetLocalD3DKMT() & 0xc0000000)) {
       ERR("D3D11Fence: Invalid device handle");
@@ -114,7 +116,6 @@ CreateFence(MTLD3D11Device *pDevice, UINT64 InitialValue, D3D11_FENCE_FLAG Flags
       ERR("D3D11Fence: Failed to create mach port for shared fence");
       return E_FAIL;
     }
-    char mach_port_name[54];
     MakeUniqueSharedName(mach_port_name);
     if (!WMTBootstrapRegister(mach_port_name, mach_port)) {
       ERR("D3D11Fence: Failed to register mach port for shared fence");
@@ -132,6 +133,10 @@ CreateFence(MTLD3D11Device *pDevice, UINT64 InitialValue, D3D11_FENCE_FLAG Flags
   }
   event.signalValue(InitialValue);
   auto fence = Com(new MTLD3D11FenceImpl(pDevice, std::move(event), local_kmt));
+  if (shared) {
+    fence->SetPrivateData(DXMT_GUID_SHARED_FENCE_BOOTSTRAP_NAME,
+                          sizeof(mach_port_name), mach_port_name);
+  }
   return fence->QueryInterface(riid, ppFence);
 }
 
@@ -148,7 +153,7 @@ OpenSharedFence(MTLD3D11Device *pDevice, HANDLE hResource,
   if (ppFence == nullptr)
     return S_FALSE;
 
-  char mach_port_name[54];
+  char mach_port_name[DXMT_NATIVE_SHARE_NAME_SIZE];
 
   D3DKMT_QUERYRESOURCEINFOFROMNTHANDLE query = {};
   query.hDevice = pDevice->GetLocalD3DKMT();
@@ -185,6 +190,8 @@ OpenSharedFence(MTLD3D11Device *pDevice, HANDLE hResource,
       pDevice,
       pDevice->GetMTLDevice().newSharedEventWithMachPort(mach_port),
       open.hSyncObject));
+  fence->SetPrivateData(DXMT_GUID_SHARED_FENCE_BOOTSTRAP_NAME,
+                        sizeof(mach_port_name), mach_port_name);
   return fence->QueryInterface(riid, ppFence);
 }
 
