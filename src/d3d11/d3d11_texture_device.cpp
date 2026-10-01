@@ -25,6 +25,7 @@
 #include "dxmt_staging.hpp"
 #include "dxmt_texture.hpp"
 #include "d3d11_resource.hpp"
+#include "dxmt_native_interop.h"
 #include "util_win32_compat.h"
 
 namespace dxmt {
@@ -344,7 +345,7 @@ public:
 };
 
 struct SharedResourceData {
-  char mach_port_name[54];
+  char mach_port_name[DXMT_NATIVE_SHARE_NAME_SIZE];
   D3D11_RESOURCE_DIMENSION dimension;
   union {
     D3D11_TEXTURE1D_DESC desc1d;
@@ -455,6 +456,13 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
         ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), create.hResource,
                                    create.hGlobalShare, std::move(keyed_mutex), pDevice))
     );
+
+    /*
+     * Publish DXMT's existing MTLSharedTextureHandle bootstrap registration.
+     * The payload is metadata only: the shared Metal storage is not copied.
+     */
+    (*ppTexture)->SetPrivateData(DXMT_GUID_SHARED_TEXTURE_BOOTSTRAP_NAME,
+                                 sizeof(runtimeData.mach_port_name), runtimeData.mach_port_name);
     return S_OK;
   }
 
