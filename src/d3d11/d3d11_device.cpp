@@ -25,6 +25,7 @@
 #include <memory>
 #include "d3d11_4.h"
 #include "util_win32_compat.h"
+#include "dxmt_native_interop.h"
 
 namespace dxmt {
 
@@ -41,7 +42,8 @@ const GUID kGpaUUID = {0xccffef16,
                        0x468f,
                        {0xbc, 0xe3, 0xcd, 0x95, 0x33, 0x69, 0xa3, 0x9a}};
 
-class MTLD3D11DeviceImpl final : public MTLD3D11Device, public IMTLD3D11DeviceExt, public IMTLSwapChainFactory {
+class MTLD3D11DeviceImpl final : public MTLD3D11Device, public IMTLD3D11DeviceExt, public IMTLSwapChainFactory,
+                               public IDXMTNativeDevice {
 friend class MTLD3D11DXGIDevice;
 public:
   MTLD3D11DeviceImpl(
@@ -73,6 +75,15 @@ public:
   ULONG STDMETHODCALLTYPE AddRef() override { return container_->AddRef(); }
 
   ULONG STDMETHODCALLTYPE Release() override { return container_->Release(); }
+
+  HRESULT STDMETHODCALLTYPE ImportSharedTexture(const char *name, const D3D11_TEXTURE2D_DESC *desc,
+                                                 ID3D11Texture2D **texture) override {
+    return ImportNativeSharedTexture(this, name, desc, texture);
+  }
+
+  HRESULT STDMETHODCALLTYPE ImportSharedEvent(const char *name, ID3D11Fence **fence) override {
+    return ImportNativeSharedEvent(this, name, fence);
+  }
 
   bool IsTraced() override { return is_traced_; }
 
@@ -453,7 +464,7 @@ public:
 
   HRESULT STDMETHODCALLTYPE
   OpenSharedResource(HANDLE hResource, REFIID ReturnedInterface, void **ppResource) override {
-    return ImportSharedTexture(this, hResource, ReturnedInterface, ppResource);
+    return dxmt::ImportSharedTexture(this, hResource, ReturnedInterface, ppResource);
   }
 
   HRESULT STDMETHODCALLTYPE
@@ -1190,6 +1201,11 @@ public:
 
     if (riid == __uuidof(IMTLD3D11DeviceExt)) {
       *ppvObject = ref_and_cast<IMTLD3D11DeviceExt>(&d3d11_device_);
+      return S_OK;
+    }
+
+    if (riid == DXMT_IID_NATIVE_DEVICE) {
+      *ppvObject = ref_and_cast<IDXMTNativeDevice>(&d3d11_device_);
       return S_OK;
     }
 

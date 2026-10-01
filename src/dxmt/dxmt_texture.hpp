@@ -176,6 +176,8 @@ private:
 class Texture {
 
 public:
+
+  Rc<TextureAllocation> importNative(const char *bootstrap_name);
   void incRef();
   void decRef();
 

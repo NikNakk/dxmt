@@ -89,6 +89,13 @@ struct unixcall_mtldevice_newtexture {
   obj_handle_t ret;
 };
 
+struct unixcall_mtldevice_importtexture {
+  obj_handle_t device;
+  struct WMTMemoryPointer info;
+  obj_handle_t ret;
+  char name[128];
+};
+
 struct unixcall_mtlbuffer_newtexture {
   obj_handle_t buffer;
   struct WMTMemoryPointer info;

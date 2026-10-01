@@ -521,6 +521,9 @@ HRESULT CreateDeviceTexture3D(MTLD3D11Device *pDevice,
 
 HRESULT ImportSharedTexture(MTLD3D11Device *pDevice, HANDLE hResource, REFIID riid, void **ppTexture);
 
+HRESULT ImportNativeSharedTexture(MTLD3D11Device *device, const char *name,
+                                 const D3D11_TEXTURE2D_DESC *desc, ID3D11Texture2D **texture);
+
 HRESULT ImportSharedTextureFromNtHandle(MTLD3D11Device *pDevice, HANDLE hResource, REFIID riid, void **ppTexture);
 
 HRESULT ImportSharedTextureByName(

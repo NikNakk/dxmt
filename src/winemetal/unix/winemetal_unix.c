@@ -2734,6 +2734,76 @@ _MTLDevice_newSharedTexture(void *obj) {
 }
 
 /* Private API to register a mach port with the bootstrap server */
+// Revocable native-import capabilities are intentionally distinct from legacy
+// raw Metal bootstrap metadata. No raw resource right is registered globally.
+#include "dxmt_native_capability.h"
+static mach_port_t
+import_native_capability(const char *name, uint32_t kind) {
+  mach_port_t bp = MACH_PORT_NULL, broker = MACH_PORT_NULL, reply_port = MACH_PORT_NULL;
+  if (task_get_bootstrap_port(mach_task_self(), &bp) != KERN_SUCCESS) return MACH_PORT_NULL;
+  kern_return_t kr = bootstrap_look_up(bp, (char *)name, &broker);
+  mach_port_deallocate(mach_task_self(), bp);
+  if (kr != KERN_SUCCESS) return MACH_PORT_NULL;
+  if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &reply_port) != KERN_SUCCESS) {
+    mach_port_deallocate(mach_task_self(), broker); return MACH_PORT_NULL;
+  }
+  union {
+    struct dxmt_native_cap_request request;
+    struct dxmt_native_cap_reply reply;
+    unsigned char buffer[sizeof(struct dxmt_native_cap_reply) + MAX_TRAILER_SIZE];
+  } msg = {0};
+  msg.request = (struct dxmt_native_cap_request){
+    .header = {.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND_ONCE),
+               .msgh_size = sizeof(msg.request), .msgh_remote_port = broker, .msgh_local_port = reply_port,
+               .msgh_id = DXMT_NATIVE_CAP_REQUEST_ID},
+    .version = DXMT_NATIVE_CAP_VERSION, .kind = kind,
+  };
+  kr = mach_msg(&msg.request.header, MACH_SEND_MSG | MACH_RCV_MSG | MACH_SEND_TIMEOUT | MACH_RCV_TIMEOUT,
+                sizeof(msg.request), sizeof(msg), reply_port, 1000, MACH_PORT_NULL);
+  mach_port_deallocate(mach_task_self(), broker);
+  mach_port_mod_refs(mach_task_self(), reply_port, MACH_PORT_RIGHT_RECEIVE, -1);
+  if (kr != MACH_MSG_SUCCESS) return MACH_PORT_NULL;
+  struct dxmt_native_cap_reply *reply = &msg.reply;
+  if (reply->header.msgh_size != sizeof(*reply) || !(reply->header.msgh_bits & MACH_MSGH_BITS_COMPLEX) ||
+      reply->header.msgh_id != DXMT_NATIVE_CAP_REPLY_ID || reply->body.msgh_descriptor_count != 1 ||
+      reply->resource.type != MACH_MSG_PORT_DESCRIPTOR || reply->resource.disposition != MACH_MSG_TYPE_PORT_SEND ||
+      reply->version != DXMT_NATIVE_CAP_VERSION || reply->kind != kind || !reply->resource.name) {
+    mach_msg_destroy(&reply->header); return MACH_PORT_NULL;
+  }
+  return reply->resource.name; // Caller owns this received send right.
+}
+
+static NTSTATUS
+_MTLDevice_importSharedTexture(void *obj) {
+  struct unixcall_mtldevice_importtexture *params = obj;
+  params->ret = 0;
+  if (!memchr(params->name, 0, sizeof(params->name)) || !params->name[0]) return STATUS_SUCCESS;
+  id<MTLDevice> device = (id<MTLDevice>)params->device;
+  struct WMTTextureInfo *expected = params->info.ptr;
+  mach_port_t port = import_native_capability(params->name, DXMT_NATIVE_CAP_TEXTURE);
+  if (!port) return STATUS_SUCCESS;
+  MTLSharedTextureHandle *handle = [[MTLSharedTextureHandle alloc] initWithMachPort:port];
+  mach_port_deallocate(mach_task_self(), port);
+  id<MTLTexture> texture = handle ? [device newSharedTextureWithHandle:handle] : nil;
+  [handle release];
+  if (!texture) return STATUS_SUCCESS;
+  struct WMTTextureInfo actual = {0};
+  extract_texture_descriptor(texture, &actual);
+  if (actual.pixel_format != expected->pixel_format || actual.width != expected->width ||
+      actual.height != expected->height || actual.depth != expected->depth ||
+      actual.type != expected->type || actual.array_length != expected->array_length ||
+      actual.mipmap_level_count != expected->mipmap_level_count || actual.sample_count != expected->sample_count ||
+      (actual.usage & expected->usage) != expected->usage || texture.framebufferOnly) {
+    [texture release];
+    return STATUS_SUCCESS;
+  }
+  actual.gpu_resource_id = texture.gpuResourceID._impl;
+  actual.mach_port = 0; // Lookup right already released; the texture owns its capability.
+  *expected = actual;
+  params->ret = (obj_handle_t)texture;
+  return STATUS_SUCCESS;
+}
+
 extern kern_return_t bootstrap_register2(mach_port_t bp, name_t service_name, mach_port_t sp, int flags);
 
 static NTSTATUS
@@ -2768,6 +2838,20 @@ _WMTBootstrapLookUp(void *obj) {
 - (id<MTLSharedEvent>)newSharedEventWithMachPort:(mach_port_t)machPort;
 
 @end
+
+static NTSTATUS
+_MTLDevice_importSharedEvent(void *obj) {
+  struct unixcall_mtldevice_importtexture *params = obj;
+  params->ret = 0;
+  if (!memchr(params->name, 0, sizeof(params->name)) || !params->name[0]) return STATUS_SUCCESS;
+  mach_port_t port = import_native_capability(params->name, DXMT_NATIVE_CAP_EVENT);
+  if (!port) return STATUS_SUCCESS;
+  id<MTLDeviceSPI> device = (id<MTLDeviceSPI>)params->device;
+  id<MTLSharedEvent> event = [device newSharedEventWithMachPort:port];
+  mach_port_deallocate(mach_task_self(), port);
+  params->ret = (obj_handle_t)event;
+  return STATUS_SUCCESS;
+}
 
 @interface MTLSharedEventHandle ()
 
@@ -3310,6 +3394,8 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLDevice_newIndirectCommandBuffer,
     &_MTLDevice_newLibraryWithSource,
     &_MTLTexture_getBytes,
+    &_MTLDevice_importSharedTexture,
+    &_MTLDevice_importSharedEvent,
 };
 
 #ifndef DXMT_NATIVE
@@ -3460,5 +3546,7 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLDevice_newIndirectCommandBuffer,
     &_MTLDevice_newLibraryWithSource,
     &_MTLTexture_getBytes,
+    &_MTLDevice_importSharedTexture,
+    &_MTLDevice_importSharedEvent,
 };
 #endif
