@@ -11,6 +11,34 @@
 
 #include <guiddef.h>
 
+#ifdef __cplusplus
+#include <d3d11.h>
+
+/* Query an ID3D11Device for this optional interface. Import synchronously
+ * resolves a live producer capability using dxmt_native_capability.h. These
+ * names identify revocable broker ports, unlike legacy raw Metal metadata.
+ * The producer keeps its broker
+ * alive until this call completes; the returned resource owns the imported
+ * Metal texture independently. No CPU staging or resource allocation occurs.
+ * Only DEFAULT, single-mip/sample, non-cube Texture2D/Texture2DArray resources
+ * with render-target and/or shader-resource bindings are supported initially.
+ * Descriptors must exactly match the native texture. */
+static const GUID DXMT_IID_NATIVE_DEVICE = {
+    0xe95e65bc, 0xdde3, 0x41ba,
+    {0xb9, 0x5e, 0xb3, 0x0d, 0x24, 0x80, 0xf4, 0x5b}};
+
+struct ID3D11Fence;
+struct IDXMTNativeDevice : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE ImportSharedTexture(
+      const char *bootstrap_name, const D3D11_TEXTURE2D_DESC *desc,
+      ID3D11Texture2D **texture) = 0;
+  /* The imported fence supports context Signal/Wait and GetCompletedValue.
+   * CreateSharedHandle is unsupported: no Windows kernel handle is created. */
+  virtual HRESULT STDMETHODCALLTYPE ImportSharedEvent(
+      const char *bootstrap_name, ID3D11Fence **fence) = 0;
+};
+#endif
+
 /*
  * Stable DXMT private-data keys for consumers that need to reopen D3D11
  * shared resources as their native macOS Metal objects.

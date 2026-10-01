@@ -613,6 +613,39 @@ ImportSharedTexture(MTLD3D11Device *pDevice, HANDLE hResource, REFIID riid, void
 }
 
 HRESULT
+ImportNativeSharedTexture(MTLD3D11Device *device, const char *name,
+                          const D3D11_TEXTURE2D_DESC *desc, ID3D11Texture2D **out) {
+  if (!out) return E_POINTER;
+  *out = nullptr;
+  if (!name || !name[0] || strnlen(name, 128) == 128 || !desc ||
+      desc->Usage != D3D11_USAGE_DEFAULT || desc->CPUAccessFlags || desc->MiscFlags ||
+      desc->MipLevels != 1 || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
+      !desc->Width || !desc->Height || !desc->ArraySize || !desc->BindFlags ||
+      (desc->BindFlags & ~(D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)))
+    return E_INVALIDARG;
+  D3D11_TEXTURE2D_DESC1 requested = {};
+  requested.Width = desc->Width;
+  requested.Height = desc->Height;
+  requested.MipLevels = desc->MipLevels;
+  requested.ArraySize = desc->ArraySize;
+  requested.Format = desc->Format;
+  requested.SampleDesc = desc->SampleDesc;
+  requested.Usage = desc->Usage;
+  requested.BindFlags = desc->BindFlags;
+  requested.TextureLayout = D3D11_TEXTURE_LAYOUT_UNDEFINED;
+  D3D11_TEXTURE2D_DESC1 final_desc;
+  WMTTextureInfo info;
+  if (FAILED(CreateMTLTextureDescriptor(device, &requested, &final_desc, &info))) return E_INVALIDARG;
+  auto texture = Rc<Texture>(new Texture(info, device->GetMTLDevice()));
+  auto allocation = texture->importNative(name);
+  if (!allocation) return E_INVALIDARG;
+  texture->rename(std::move(allocation));
+  Com<DeviceTexture<tag_texture_2d>> resource = ref(new DeviceTexture<tag_texture_2d>(
+      &final_desc, std::move(texture), device));
+  return resource->QueryInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void **>(out));
+}
+
+HRESULT
 ImportSharedTextureFromNtHandle(MTLD3D11Device *pDevice, HANDLE hResource, REFIID riid, void **ppTexture) {
   InitReturnPtr(ppTexture);
 

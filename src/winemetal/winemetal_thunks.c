@@ -1059,6 +1059,27 @@ MTLDevice_newSharedTexture(obj_handle_t device, struct WMTTextureInfo *info) {
   return params.ret;
 }
 
+WINEMETAL_API obj_handle_t
+MTLDevice_importSharedTexture(obj_handle_t device, const char *name, struct WMTTextureInfo *info) {
+  if (!name || !info || strnlen(name, 128) == 128) return 0;
+  struct unixcall_mtldevice_importtexture params = {0};
+  params.device = device;
+  WMT_MEMPTR_SET(params.info, info);
+  memcpy(params.name, name, strlen(name) + 1);
+  UNIX_CALL(146, &params);
+  return params.ret;
+}
+
+WINEMETAL_API obj_handle_t
+MTLDevice_importSharedEvent(obj_handle_t device, const char *name) {
+  if (!name || strnlen(name, 128) == 128) return 0;
+  struct unixcall_mtldevice_importtexture params = {0};
+  params.device = device;
+  memcpy(params.name, name, strlen(name) + 1);
+  UNIX_CALL(147, &params);
+  return params.ret;
+}
+
 WINEMETAL_API bool
 WMTBootstrapRegister(const char *name, mach_port_t mach_port) {
   struct unixcall_bootstrap params;
