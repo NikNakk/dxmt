@@ -17,6 +17,8 @@ HRESULT
 OpenSharedFence(MTLD3D11Device *pDevice, HANDLE hResource,
                 REFIID riid, void **ppFence);
 
+HRESULT ImportNativeEventObject(MTLD3D11Device *device, uint64_t object, ID3D11Fence **out);
+
 HRESULT ImportNativeSharedEvent(MTLD3D11Device *device, const char *name, ID3D11Fence **fence);
 
 } // namespace dxmt

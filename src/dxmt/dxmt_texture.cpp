@@ -261,6 +261,20 @@ Texture::importNative(const char *name) {
   return new TextureAllocation(this, std::move(texture), info, flags);
 }
 
+Rc<TextureAllocation>
+Texture::importNativeObject(uint64_t object) {
+  WMTTextureInfo info = info_;
+  WMT::Reference<WMT::Texture> texture(MTLDevice_retainTextureObject(device_.handle, object, &info));
+  if (!texture) return nullptr;
+  Flags<TextureAllocationFlag> flags;
+  flags.set(TextureAllocationFlag::Shared);
+  if (info.options & WMTResourceStorageModePrivate) flags.set(TextureAllocationFlag::GpuPrivate);
+  if (info.options & WMTResourceHazardTrackingModeUntracked) flags.set(TextureAllocationFlag::NoTracking);
+  if (!(info.usage & (WMTTextureUsageShaderWrite | WMTTextureUsageRenderTarget)))
+    flags.set(TextureAllocationFlag::ShaderReadonly);
+  return new TextureAllocation(this, std::move(texture), info, flags);
+}
+
 TextureView &
 Texture::view(TextureViewKey key) {
   return view(key, current_.ptr());

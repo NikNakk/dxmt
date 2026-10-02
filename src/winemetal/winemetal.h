@@ -1995,6 +1995,9 @@ WINEMETAL_API obj_handle_t MTLDevice_newSharedTexture(obj_handle_t device, struc
 WINEMETAL_API obj_handle_t MTLDevice_importSharedTexture(obj_handle_t device, const char *name,
                                                        struct WMTTextureInfo *expected_info);
 WINEMETAL_API obj_handle_t MTLDevice_importSharedEvent(obj_handle_t device, const char *name);
+WINEMETAL_API obj_handle_t MTLDevice_retainTextureObject(obj_handle_t device, obj_handle_t texture,
+                                                       struct WMTTextureInfo *info);
+WINEMETAL_API obj_handle_t MTLDevice_retainEventObject(obj_handle_t device, obj_handle_t event);
 
 WINEMETAL_API bool WMTBootstrapRegister(const char *name, mach_port_t mach_port);
 

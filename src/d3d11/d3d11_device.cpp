@@ -43,7 +43,7 @@ const GUID kGpaUUID = {0xccffef16,
                        {0xbc, 0xe3, 0xcd, 0x95, 0x33, 0x69, 0xa3, 0x9a}};
 
 class MTLD3D11DeviceImpl final : public MTLD3D11Device, public IMTLD3D11DeviceExt, public IMTLSwapChainFactory,
-                               public IDXMTNativeDevice {
+                               public IDXMTNativeDevice, public IDXMTNativeDevice2 {
 friend class MTLD3D11DXGIDevice;
 public:
   MTLD3D11DeviceImpl(
@@ -83,6 +83,21 @@ public:
 
   HRESULT STDMETHODCALLTYPE ImportSharedEvent(const char *name, ID3D11Fence **fence) override {
     return ImportNativeSharedEvent(this, name, fence);
+  }
+
+  HRESULT STDMETHODCALLTYPE GetMetalDevice(UINT64 *device) override {
+    if (!device) return E_POINTER;
+    *device = GetMTLDevice().handle;
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE ImportMetalTexture(UINT64 texture, const D3D11_TEXTURE2D_DESC *desc,
+                                                ID3D11Texture2D **out) override {
+    return ImportNativeTextureObject(this, texture, desc, out);
+  }
+
+  HRESULT STDMETHODCALLTYPE ImportMetalSharedEvent(UINT64 event, ID3D11Fence **out) override {
+    return ImportNativeEventObject(this, event, out);
   }
 
   bool IsTraced() override { return is_traced_; }
@@ -1201,6 +1216,11 @@ public:
 
     if (riid == __uuidof(IMTLD3D11DeviceExt)) {
       *ppvObject = ref_and_cast<IMTLD3D11DeviceExt>(&d3d11_device_);
+      return S_OK;
+    }
+
+    if (riid == DXMT_IID_NATIVE_DEVICE2) {
+      *ppvObject = ref_and_cast<IDXMTNativeDevice2>(&d3d11_device_);
       return S_OK;
     }
 

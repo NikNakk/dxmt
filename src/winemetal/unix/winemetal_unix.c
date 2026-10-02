@@ -2859,6 +2859,48 @@ _MTLDevice_importSharedTexture(void *obj) {
   return STATUS_SUCCESS;
 }
 
+
+// In-process imports: validate and retain the exact runtime-owned object.
+static NTSTATUS
+_MTLDevice_retainTextureObject(void *obj) {
+  struct unixcall_mtldevice_retainobject *params = obj;
+  params->ret = 0;
+  @autoreleasepool {
+    id<MTLDevice> device = (id<MTLDevice>)params->device;
+    id<MTLTexture> texture = (id<MTLTexture>)params->object;
+    struct WMTTextureInfo *expected = params->info.ptr;
+    if (!device || !texture || !expected || ![texture conformsToProtocol:@protocol(MTLTexture)] ||
+        texture.device.registryID != device.registryID || texture.framebufferOnly) return STATUS_SUCCESS;
+    struct WMTTextureInfo actual = {0};
+    extract_texture_descriptor(texture, &actual);
+    if (actual.pixel_format != expected->pixel_format || actual.width != expected->width ||
+        actual.height != expected->height || actual.depth != expected->depth ||
+        actual.type != expected->type || actual.array_length != expected->array_length ||
+        actual.mipmap_level_count != expected->mipmap_level_count || actual.sample_count != expected->sample_count ||
+        (actual.usage & expected->usage) != expected->usage) return STATUS_SUCCESS;
+    actual.gpu_resource_id = texture.gpuResourceID._impl;
+    actual.mach_port = 0;
+    *expected = actual;
+    params->ret = (obj_handle_t)[texture retain];
+  }
+  return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+_MTLDevice_retainEventObject(void *obj) {
+  struct unixcall_mtldevice_retainobject *params = obj;
+  params->ret = 0;
+  @autoreleasepool {
+    id<MTLDevice> device = (id<MTLDevice>)params->device;
+    id<MTLSharedEvent> event = (id<MTLSharedEvent>)params->object;
+    if (!device || !event || ![event conformsToProtocol:@protocol(MTLSharedEvent)]) return STATUS_SUCCESS;
+    // MTLSharedEvent.device can legitimately be nil.
+    if (event.device && event.device.registryID != device.registryID) return STATUS_SUCCESS;
+    params->ret = (obj_handle_t)[event retain];
+  }
+  return STATUS_SUCCESS;
+}
+
 extern kern_return_t bootstrap_register2(mach_port_t bp, name_t service_name, mach_port_t sp, int flags);
 
 static NTSTATUS
@@ -3451,6 +3493,8 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLTexture_getBytes,
     &_MTLDevice_importSharedTexture,
     &_MTLDevice_importSharedEvent,
+    &_MTLDevice_retainTextureObject,
+    &_MTLDevice_retainEventObject,
 };
 
 #ifndef DXMT_NATIVE
@@ -3603,5 +3647,7 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLTexture_getBytes,
     &_MTLDevice_importSharedTexture,
     &_MTLDevice_importSharedEvent,
+    &_MTLDevice_retainTextureObject,
+    &_MTLDevice_retainEventObject,
 };
 #endif
