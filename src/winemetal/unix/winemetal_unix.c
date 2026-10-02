@@ -1681,6 +1681,49 @@ struct macdrv_functions_t {
   void (*on_main_thread)(dispatch_block_t b);
 };
 
+/* Upstream Wine 11 hides the macdrv helpers, but WineWindow retains its HWND
+ * selector. Resolve only the requested top-level window on AppKit's thread;
+ * choosing the key window could attach a game's swapchain to a dialog instead.
+ */
+@protocol DXMTWineWindowHandle
+- (void *)hwnd;
+@end
+
+@interface DXMTWineMetalView : NSView
+@end
+
+@implementation DXMTWineMetalView
+- (NSView *)hitTest:(NSPoint)point {
+  /* Let Wine's content view continue receiving mouse input. */
+  return nil;
+}
+@end
+
+static void
+create_wine_window_metal_view(struct unixcall_create_metal_view_from_hwnd *params) {
+  execute_on_main(^{
+    Class wine_window_class = NSClassFromString(@"WineWindow");
+    if (!wine_window_class) return;
+    for (NSWindow *window in [NSApp windows]) {
+      if (![window isKindOfClass:wine_window_class] || ![window respondsToSelector:@selector(hwnd)] ||
+          (uint64_t)(uintptr_t)[(id<DXMTWineWindowHandle>)window hwnd] != params->hwnd)
+        continue;
+      NSView *content = window.contentView;
+      if (!content) return;
+      DXMTWineMetalView *view = [[DXMTWineMetalView alloc] initWithFrame:content.bounds];
+      view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      CAMetalLayer *layer = [CAMetalLayer layer];
+      layer.device = (id<MTLDevice>)params->device;
+      view.wantsLayer = YES;
+      view.layer = layer;
+      [content addSubview:view positioned:NSWindowAbove relativeTo:nil];
+      params->ret_view = (obj_handle_t)view;
+      params->ret_layer = (obj_handle_t)layer;
+      return;
+    }
+  });
+}
+
 static NTSTATUS
 _CreateMetalViewFromHWND(void *obj) {
   struct unixcall_create_metal_view_from_hwnd *params = obj;
@@ -1706,6 +1749,7 @@ _CreateMetalViewFromHWND(void *obj) {
   if (pfn_get_win_data && pfn_release_win_data && pfn_macdrv_view_create_metal_view &&
       pfn_macdrv_view_get_metal_layer) {
     struct macdrv_win_data *win_data = pfn_get_win_data((HWND)params->hwnd);
+    if (!win_data) return STATUS_UNSUCCESSFUL;
     macdrv_metal_view view =
         pfn_macdrv_view_create_metal_view(win_data->client_cocoa_view, (macdrv_metal_device)params->device);
     params->ret_view = (obj_handle_t)view;
@@ -1713,6 +1757,8 @@ _CreateMetalViewFromHWND(void *obj) {
       params->ret_layer = (obj_handle_t)pfn_macdrv_view_get_metal_layer(view);
     }
     pfn_release_win_data(win_data);
+  } else {
+    create_wine_window_metal_view(params);
   }
 
   return STATUS_SUCCESS;
@@ -1721,6 +1767,15 @@ _CreateMetalViewFromHWND(void *obj) {
 static NTSTATUS
 _ReleaseMetalView(void *obj) {
   struct unixcall_generic_obj_noret *params = obj;
+
+  if ([(id)params->handle isKindOfClass:[DXMTWineMetalView class]]) {
+    execute_on_main(^{
+      DXMTWineMetalView *view = (DXMTWineMetalView *)params->handle;
+      [view removeFromSuperview];
+      [view release];
+    });
+    return STATUS_SUCCESS;
+  }
 
   void (*pfn_macdrv_view_release_metal_view)(macdrv_metal_view v) = NULL;
 
