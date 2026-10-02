@@ -79,3 +79,21 @@ invalid descriptors and imports after broker closure were rejected. The same
 API wrapped native Monado runtime-owned images directly and shared staging
 images used for Meta's GPU-copy path. Physical headset/game validation remains
 in the consumer project.
+
+## Stock Wine 11.10 presentation
+
+When Wine does not export the macdrv Metal-view helpers, winemetal resolves
+the requested top-level HWND through Wine 11.10's `WineWindow.hwnd` selector
+on the AppKit thread. It attaches a retained Metal view to that exact window,
+autoresizes it with the content view and removes it on release. Mouse hit
+testing passes through to Wine's content view. Missing window/class/selector
+matches remain unsupported; the fallback never selects an arbitrary key or
+foreground window. The existing exported-helper path remains preferred.
+This uses Wine's internal Objective-C surface and must be checked when updating
+Wine. Child HWND presentation is outside this fallback's scope.
+
+On an Apple M5, the consumer's two-window desktop probe passed create, present,
+resize and destruction with stock Wine 11.10 (2026-10-02). The same stack
+submitted 328 `hello_xr` frames to simulated Monado with direct runtime-image
+sharing and 520 to Meta with shared staging plus a native Metal blit. Native
+texture/event import Unix call IDs remain unchanged.
