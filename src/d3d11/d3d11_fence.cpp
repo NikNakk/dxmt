@@ -152,6 +152,17 @@ ImportNativeSharedEvent(MTLD3D11Device *device, const char *name, ID3D11Fence **
 }
 
 HRESULT
+ImportNativeEventObject(MTLD3D11Device *device, uint64_t object, ID3D11Fence **out) {
+  if (!out) return E_POINTER;
+  *out = nullptr;
+  if (!object) return E_INVALIDARG;
+  WMT::Reference<WMT::SharedEvent> event(MTLDevice_retainEventObject(device->GetMTLDevice().handle, object));
+  if (!event) return E_INVALIDARG;
+  auto fence = Com(new MTLD3D11FenceImpl(device, std::move(event), 0));
+  return fence->QueryInterface(__uuidof(ID3D11Fence), reinterpret_cast<void **>(out));
+}
+
+HRESULT
 OpenSharedFence(MTLD3D11Device *pDevice, HANDLE hResource,
                 REFIID riid, void **ppFence) {
   InitReturnPtr(ppFence);

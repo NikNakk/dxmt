@@ -1352,3 +1352,24 @@ MTLTexture_getBytes(
   params.bytes_per_image = bytes_per_image;
   UNIX_CALL(145, &params);
 }
+
+WINEMETAL_API obj_handle_t
+MTLDevice_retainTextureObject(obj_handle_t device, obj_handle_t texture, struct WMTTextureInfo *info) {
+  if (!device || !texture || !info) return 0;
+  struct unixcall_mtldevice_retainobject params = {0};
+  params.device = device;
+  params.object = texture;
+  WMT_MEMPTR_SET(params.info, info);
+  UNIX_CALL(148, &params);
+  return params.ret;
+}
+
+WINEMETAL_API obj_handle_t
+MTLDevice_retainEventObject(obj_handle_t device, obj_handle_t event) {
+  if (!device || !event) return 0;
+  struct unixcall_mtldevice_retainobject params = {0};
+  params.device = device;
+  params.object = event;
+  UNIX_CALL(149, &params);
+  return params.ret;
+}

@@ -27,7 +27,21 @@ static const GUID DXMT_IID_NATIVE_DEVICE = {
     0xe95e65bc, 0xdde3, 0x41ba,
     {0xb9, 0x5e, 0xb3, 0x0d, 0x24, 0x80, 0xf4, 0x5b}};
 
+/* Optional in-process interface. Object values are borrowed native Objective-C
+ * pointers, valid only in this Wine process. Imports retain the exact object;
+ * they never reopen a sharing handle, allocate replacement storage or copy.
+ * The caller owns the input until import returns. GetMetalDevice is borrowed
+ * for the lifetime of the D3D device. The old interface/IID is unchanged. */
+static const GUID DXMT_IID_NATIVE_DEVICE2 = {
+    0x5a6d2e1b, 0xb10a, 0x4ab7,
+    {0x8a, 0xde, 0xd9, 0xa6, 0x4c, 0x41, 0x72, 0x83}};
 struct ID3D11Fence;
+struct IDXMTNativeDevice2 : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE GetMetalDevice(UINT64 *device) = 0;
+  virtual HRESULT STDMETHODCALLTYPE ImportMetalTexture(UINT64 texture,
+      const D3D11_TEXTURE2D_DESC *desc, ID3D11Texture2D **out) = 0;
+  virtual HRESULT STDMETHODCALLTYPE ImportMetalSharedEvent(UINT64 event, ID3D11Fence **out) = 0;
+};
 struct IDXMTNativeDevice : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE ImportSharedTexture(
       const char *bootstrap_name, const D3D11_TEXTURE2D_DESC *desc,

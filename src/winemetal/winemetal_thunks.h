@@ -89,6 +89,13 @@ struct unixcall_mtldevice_newtexture {
   obj_handle_t ret;
 };
 
+struct unixcall_mtldevice_retainobject {
+  obj_handle_t device;
+  obj_handle_t object;
+  struct WMTMemoryPointer info;
+  obj_handle_t ret;
+};
+
 struct unixcall_mtldevice_importtexture {
   obj_handle_t device;
   struct WMTMemoryPointer info;
