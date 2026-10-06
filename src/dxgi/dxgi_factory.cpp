@@ -144,7 +144,7 @@ public:
       IDXGIOutput *pRestrictToOutput, IDXGISwapChain1 **ppSwapChain) final {
     InitReturnPtr(ppSwapChain);
 
-    ERR("Not implemented");
+    ERR("CreateSwapChainForCoreWindow: Not implemented");
     return E_NOTIMPL;
   }
 
@@ -154,7 +154,7 @@ public:
       IDXGIOutput *pRestrictToOutput, IDXGISwapChain1 **ppSwapChain) final {
     InitReturnPtr(ppSwapChain);
 
-    ERR("Not implemented");
+    ERR("CreateSwapChainForComposition: Not implemented");
     return E_NOTIMPL;
   }
 
@@ -211,7 +211,7 @@ public:
 
   HRESULT STDMETHODCALLTYPE GetSharedResourceAdapterLuid(HANDLE hResource,
                                                          LUID *pLuid) final {
-    ERR("Not implemented");
+    ERR("GetSharedResourceAdapterLuid: Not implemented");
     return E_NOTIMPL;
   }
 
@@ -228,35 +228,35 @@ public:
 
   HRESULT STDMETHODCALLTYPE RegisterOcclusionStatusWindow(
       HWND WindowHandle, UINT wMsg, DWORD *pdwCookie) final {
-    ERR("Not implemented");
+    ERR("RegisterOcclusionStatusWindow: Not implemented");
     return E_NOTIMPL;
   }
 
   HRESULT STDMETHODCALLTYPE RegisterStereoStatusEvent(HANDLE hEvent,
                                                       DWORD *pdwCookie) final {
-    ERR("Not implemented");
+    ERR("RegisterStereoStatusEvent: Not implemented");
     return E_NOTIMPL;
   }
 
   HRESULT STDMETHODCALLTYPE RegisterStereoStatusWindow(HWND WindowHandle,
                                                        UINT wMsg,
                                                        DWORD *pdwCookie) final {
-    ERR("Not implemented");
+    ERR("RegisterStereoStatusWindow: Not implemented");
     return E_NOTIMPL;
   }
 
   HRESULT STDMETHODCALLTYPE
   RegisterOcclusionStatusEvent(HANDLE hEvent, DWORD *pdwCookie) final {
-    ERR("Not implemented");
+    ERR("RegisterOcclusionStatusEvent: Not implemented");
     return E_NOTIMPL;
   }
 
   void STDMETHODCALLTYPE UnregisterStereoStatus(DWORD dwCookie) final {
-    ERR("Not implemented");
+    ERR("UnregisterStereoStatus: Not implemented");
   }
 
   void STDMETHODCALLTYPE UnregisterOcclusionStatus(DWORD dwCookie) final {
-    ERR("Not implemented");
+    ERR("UnregisterOcclusionStatus: Not implemented");
   }
 
   UINT STDMETHODCALLTYPE GetCreationFlags() override { return flags_; }
