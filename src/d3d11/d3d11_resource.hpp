@@ -9,6 +9,7 @@
 #include "com/com_guid.hpp"
 #include "d3d11_view.hpp"
 #include "dxgi_resource.hpp"
+#include "dxmt_native_interop.h"
 #include "log/log.hpp"
 #include "../d3d10/d3d10_buffer.hpp"
 #include "../d3d10/d3d10_texture.hpp"
@@ -468,6 +469,19 @@ protected:
 
 #pragma region Resource Factory
 
+/* Private runtime data of a DXMT D3DKMT shared resource (texture or buffer). */
+struct SharedResourceData {
+  char mach_port_name[DXMT_NATIVE_SHARE_NAME_SIZE];
+  D3D11_RESOURCE_DIMENSION dimension;
+  union {
+    D3D11_TEXTURE1D_DESC desc1d;
+    D3D11_TEXTURE2D_DESC1 desc2d;
+    D3D11_TEXTURE3D_DESC1 desc3d;
+    D3D11_BUFFER_DESC desc_buffer;
+  } desc;
+  D3DKMT_HANDLE mutex_handle;
+};
+
 inline void MakeUniqueSharedName(char (&out)[54]) {
     std::random_device rd;
     std::mt19937_64 gen(rd());
@@ -529,6 +543,55 @@ HRESULT ImportSharedTextureFromNtHandle(MTLD3D11Device *pDevice, HANDLE hResourc
 HRESULT ImportSharedTextureByName(
     MTLD3D11Device *pDevice, LPCWSTR lpName, DWORD dwDesiredAccess, REFIID riid, void **ppTexture
 );
+
+/* D3DKMTShareObjects on a local shared-resource handle, with an optional session-local name. */
+inline HRESULT
+CreateSharedResourceNtHandle(
+    D3DKMT_HANDLE local_kmt, const SECURITY_ATTRIBUTES *Attributes, DWORD Access, const WCHAR *pName,
+    HANDLE *pNTHandle
+) {
+  if (!local_kmt)
+    return E_INVALIDARG;
+
+  OBJECT_ATTRIBUTES attr = {};
+  attr.Length = sizeof(attr);
+  attr.SecurityDescriptor = const_cast<SECURITY_ATTRIBUTES *>(Attributes);
+
+  WCHAR buffer[MAX_PATH];
+  UNICODE_STRING name_str;
+  if (pName) {
+    DWORD session, len, name_len = wcslen(pName);
+
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    len = swprintf(buffer, ARRAYSIZE(buffer), L"\\Sessions\\%u\\BaseNamedObjects\\", session);
+    memcpy(buffer + len, pName, (name_len + 1) * sizeof(WCHAR));
+    name_str.MaximumLength = name_str.Length = (len + name_len) * sizeof(WCHAR);
+    name_str.MaximumLength += sizeof(WCHAR);
+    name_str.Buffer = buffer;
+
+    attr.ObjectName = &name_str;
+    attr.Attributes = OBJ_CASE_INSENSITIVE;
+  }
+
+  if (D3DKMTShareObjects(1, &local_kmt, &attr, Access, pNTHandle)) {
+    ERR("CreateSharedHandle: Failed to create shared handle");
+    return E_FAIL;
+  }
+  return S_OK;
+}
+
+inline void
+DestroySharedResourceHandle(MTLD3D11Device *pDevice, D3DKMT_HANDLE hLocal) {
+  if (!hLocal)
+    return;
+  D3DKMT_DESTROYALLOCATION destroy = {};
+  destroy.hDevice = pDevice->GetLocalD3DKMT();
+  destroy.hResource = hLocal;
+  D3DKMTDestroyAllocation(&destroy);
+}
+
+HRESULT ImportSharedBuffer(MTLD3D11Device *pDevice, const D3D11_BUFFER_DESC *pDesc, mach_port_t MachPort,
+                           D3DKMT_HANDLE hLocal, D3DKMT_HANDLE hGlobal, REFIID riid, void **ppBuffer);
 
 HRESULT
 CreateBuffer(MTLD3D11Device *pDevice, const D3D11_BUFFER_DESC *pDesc,
