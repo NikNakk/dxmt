@@ -130,12 +130,16 @@ KeyedMutex::acquire(KeyedMutexAcquire &&func_acquire, uint64_t key, uint32_t mil
   if (owned_.load(std::memory_order_acquire))
     return E_FAIL;
 
+  // NT timeouts are relative when negative and absolute when positive; a
+  // null timeout waits forever.
   LARGE_INTEGER timeout = {};
   D3DKMT_ACQUIREKEYEDMUTEX acquire = {};
   acquire.hKeyedMutex = local_kmt_;
   acquire.Key = key;
-  acquire.pTimeout = &timeout;
-  timeout.QuadPart = milliseconds * -10000;
+  if (milliseconds != INFINITE) {
+    timeout.QuadPart = -static_cast<int64_t>(milliseconds) * 10000;
+    acquire.pTimeout = &timeout;
+  }
 
   NTSTATUS status = D3DKMTAcquireKeyedMutex(&acquire);
   if (status == STATUS_TIMEOUT)
