@@ -135,6 +135,88 @@ void FilterModesByDesc(std::vector<DXGI_MODE_DESC1> &Modes,
   }
 }
 
+/*
+ * Desktop duplication without capture: a valid duplication object that never
+ * has a new desktop frame. Clients such as SteamVR's vrdesktop require
+ * DuplicateOutput to succeed during initialisation; they then show an empty
+ * desktop view. Real capture would need ScreenCaptureKit.
+ */
+class MTLDXGIOutputDuplicationNoCapture : public MTLDXGIObject<IDXGIOutputDuplication> {
+public:
+  MTLDXGIOutputDuplicationNoCapture(IDXGIOutput *output, const DXGI_OUTDUPL_DESC &desc) :
+      output_(output),
+      desc_(desc) {}
+
+  HRESULT STDMETHODCALLTYPE
+  QueryInterface(REFIID riid, void **ppvObject) final {
+    if (ppvObject == nullptr)
+      return E_POINTER;
+    *ppvObject = nullptr;
+    if (riid == __uuidof(IUnknown) || riid == __uuidof(IDXGIObject) || riid == __uuidof(IDXGIOutputDuplication)) {
+      *ppvObject = ref(this);
+      return S_OK;
+    }
+    return E_NOINTERFACE;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  GetParent(REFIID riid, void **ppParent) final {
+    return output_->QueryInterface(riid, ppParent);
+  }
+
+  void STDMETHODCALLTYPE
+  GetDesc(DXGI_OUTDUPL_DESC *pDesc) final {
+    if (pDesc)
+      *pDesc = desc_;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  AcquireNextFrame(UINT TimeoutInMilliseconds, DXGI_OUTDUPL_FRAME_INFO *pFrameInfo,
+                   IDXGIResource **ppDesktopResource) final {
+    InitReturnPtr(ppDesktopResource);
+    if (!pFrameInfo || !ppDesktopResource)
+      return E_INVALIDARG;
+    *pFrameInfo = {};
+    // Never block indefinitely: callers poll this from their own threads.
+    Sleep(std::min<UINT>(TimeoutInMilliseconds, 100));
+    return DXGI_ERROR_WAIT_TIMEOUT;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  GetFrameDirtyRects(UINT, RECT *, UINT *) final {
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  GetFrameMoveRects(UINT, DXGI_OUTDUPL_MOVE_RECT *, UINT *) final {
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  GetFramePointerShape(UINT, void *, UINT *, DXGI_OUTDUPL_POINTER_SHAPE_INFO *) final {
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  MapDesktopSurface(DXGI_MAPPED_RECT *) final {
+    return DXGI_ERROR_UNSUPPORTED;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  UnMapDesktopSurface() final {
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+  HRESULT STDMETHODCALLTYPE
+  ReleaseFrame() final {
+    return DXGI_ERROR_INVALID_CALL;
+  }
+
+private:
+  Com<IDXGIOutput> output_;
+  DXGI_OUTDUPL_DESC desc_;
+};
+
 class MTLDXGIOutputImpl : public MTLDXGIOutput {
 public:
   MTLDXGIOutputImpl(IMTLDXGIAdapter *adapter, HMONITOR monitor, DxgiOptions &options)
@@ -543,10 +625,7 @@ public:
     if (!pDevice)
       return E_INVALIDARG;
 
-    ERR("DuplicateOutput: Not implemented");
-
-    // At least return a valid error code
-    return DXGI_ERROR_UNSUPPORTED;
+    return CreateNoCaptureDuplication(ppOutputDuplication);
   }
 
   HRESULT
@@ -628,12 +707,29 @@ public:
     if (!pDevice)
       return E_INVALIDARG;
 
-    ERR("DuplicateOutput1: Not implemented");
-
-    return DXGI_ERROR_UNSUPPORTED;
+    return CreateNoCaptureDuplication(ppOutputDuplication);
   }
 
 private:
+  HRESULT
+  CreateNoCaptureDuplication(IDXGIOutputDuplication **ppOutputDuplication) {
+    if (!ppOutputDuplication)
+      return E_INVALIDARG;
+    DXGI_OUTPUT_DESC output_desc;
+    if (FAILED(GetDesc(&output_desc)))
+      return DXGI_ERROR_UNSUPPORTED;
+    DXGI_OUTDUPL_DESC desc = {};
+    desc.ModeDesc.Width = output_desc.DesktopCoordinates.right - output_desc.DesktopCoordinates.left;
+    desc.ModeDesc.Height = output_desc.DesktopCoordinates.bottom - output_desc.DesktopCoordinates.top;
+    desc.ModeDesc.RefreshRate = {60, 1};
+    desc.ModeDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.Rotation = output_desc.Rotation;
+    desc.DesktopImageInSystemMemory = FALSE;
+    WARN("DuplicateOutput: desktop capture is not implemented; returning a duplication without frames");
+    *ppOutputDuplication = new MTLDXGIOutputDuplicationNoCapture(this, desc);
+    return S_OK;
+  }
+
   Com<IMTLDXGIAdapter> adapter_ = nullptr;
   HMONITOR monitor_ = nullptr;
   WMTDisplayDescription native_desc_;
