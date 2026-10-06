@@ -36,6 +36,14 @@ KeyedMutex::decRef() {
 #ifdef _WIN32
 
 KeyedMutex::~KeyedMutex() {
+  if (owner_thread_.joinable()) {
+    {
+      std::unique_lock<dxmt::mutex> lock(owner_lock_);
+      owner_stop_ = true;
+    }
+    owner_cond_.notify_all();
+    owner_thread_.join();
+  }
   if (local_kmt_) {
     D3DKMT_DESTROYKEYEDMUTEX destroy = {};
     destroy.hKeyedMutex = local_kmt_;
@@ -121,6 +129,35 @@ KeyedMutex::import(WMT::Device device, D3DKMT_HANDLE global_kmt) {
   return ret;
 }
 
+NTSTATUS
+KeyedMutex::runOnOwnerThread(const std::function<NTSTATUS()> &call) {
+  std::unique_lock<dxmt::mutex> serial(call_lock_);
+  std::unique_lock<dxmt::mutex> lock(owner_lock_);
+  if (!owner_thread_.joinable()) {
+    owner_thread_ = dxmt::thread([this] {
+      std::unique_lock<dxmt::mutex> lock(owner_lock_);
+      while (true) {
+        owner_cond_.wait(lock, [this] { return owner_stop_ || owner_call_ != nullptr; });
+        if (owner_stop_)
+          return;
+        const std::function<NTSTATUS()> *call = owner_call_;
+        owner_call_ = nullptr;
+        lock.unlock();
+        NTSTATUS result = (*call)();
+        lock.lock();
+        owner_result_ = result;
+        owner_done_ = true;
+        owner_cond_.notify_all();
+      }
+    });
+  }
+  owner_done_ = false;
+  owner_call_ = &call;
+  owner_cond_.notify_all();
+  owner_cond_.wait(lock, [this] { return owner_done_; });
+  return owner_result_;
+}
+
 HRESULT
 KeyedMutex::acquire(KeyedMutexAcquire &&func_acquire, uint64_t key, uint32_t milliseconds) {
   /**
@@ -141,7 +178,7 @@ KeyedMutex::acquire(KeyedMutexAcquire &&func_acquire, uint64_t key, uint32_t mil
     acquire.pTimeout = &timeout;
   }
 
-  NTSTATUS status = D3DKMTAcquireKeyedMutex(&acquire);
+  NTSTATUS status = runOnOwnerThread([&acquire] { return D3DKMTAcquireKeyedMutex(&acquire); });
   if (status == STATUS_TIMEOUT)
     return WAIT_TIMEOUT;
   if (status == STATUS_ABANDONED_WAIT_0)
@@ -173,7 +210,7 @@ KeyedMutex::release(KeyedMutexRelease &&func_release, uint64_t key) {
   release.Key = key;
   release.FenceValue = fence_value_ + 1;
 
-  if (D3DKMTReleaseKeyedMutex(&release)) {
+  if (runOnOwnerThread([&release] { return D3DKMTReleaseKeyedMutex(&release); })) {
     WARN("KeyedMutex: Failed to release keyed mutex.");
     return E_FAIL;
   }

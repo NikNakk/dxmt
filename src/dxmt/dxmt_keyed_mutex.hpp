@@ -20,6 +20,7 @@
 #include "Metal.hpp"
 #include "rc/util_rc_ptr.hpp"
 #include "util_d3dkmt.h"
+#include "thread.hpp"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -53,8 +54,22 @@ public:
   }
 
 private:
+  NTSTATUS runOnOwnerThread(const std::function<NTSTATUS()> &call);
+
   D3DKMT_HANDLE local_kmt_;
   D3DKMT_HANDLE global_kmt_;
+  /* Wine's server tracks keyed-mutex ownership per thread, while D3D11 ties it
+   * to the device: applications may acquire on one thread and release on
+   * another (SteamVR's compositor does). Every D3DKMT acquire and release of
+   * this mutex therefore runs on one owner thread. */
+  dxmt::mutex call_lock_;
+  dxmt::mutex owner_lock_;
+  dxmt::condition_variable owner_cond_;
+  dxmt::thread owner_thread_;
+  const std::function<NTSTATUS()> *owner_call_ = nullptr;
+  NTSTATUS owner_result_ = 0;
+  bool owner_done_ = false;
+  bool owner_stop_ = false;
   std::atomic<uint32_t> refcount_ = {0u};
   std::atomic_bool owned_ = false;
   uint64_t fence_value_ = 0;
