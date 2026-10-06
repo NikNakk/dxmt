@@ -42,6 +42,20 @@ struct IDXMTNativeDevice2 : public IUnknown {
       const D3D11_TEXTURE2D_DESC *desc, ID3D11Texture2D **out) = 0;
   virtual HRESULT STDMETHODCALLTYPE ImportMetalSharedEvent(UINT64 event, ID3D11Fence **out) = 0;
 };
+/* Optional, in-process: publish an existing DEFAULT Texture2D for other
+ * processes, as if it had been created with D3D11_RESOURCE_MISC_SHARED.
+ * Returns the legacy (KMT) handle for ID3D11Device::OpenSharedResource; it
+ * stays valid as long as this texture lives. Only textures whose Metal
+ * storage is shareable (for example images imported with
+ * ImportMetalTexture from newSharedTextureWithDescriptor:) can be
+ * published; others return DXGI_ERROR_UNSUPPORTED. Repeated calls return
+ * the same handle. No storage is copied. */
+static const GUID DXMT_IID_NATIVE_DEVICE3 = {
+    0x3c9b7f0e, 0x6a41, 0x4d2e,
+    {0x9b, 0x77, 0x58, 0x12, 0xc4, 0x0e, 0xa1, 0x6d}};
+struct IDXMTNativeDevice3 : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE CreateSharedTextureHandle(ID3D11Texture2D *texture, HANDLE *handle) = 0;
+};
 struct IDXMTNativeDevice : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE ImportSharedTexture(
       const char *bootstrap_name, const D3D11_TEXTURE2D_DESC *desc,

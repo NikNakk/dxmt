@@ -2005,6 +2005,10 @@ WINEMETAL_API obj_handle_t MTLDevice_retainEventObject(obj_handle_t device, obj_
  * right in *mach_port. Otherwise maps the given memory entry (which must cover
  * info->length rounded up to 16 KiB). Returns 0 on failure.
  */
+/* Mach port of an existing texture's MTLSharedTextureHandle, or 0 if the
+ * texture was not created shareable. The caller owns the send right. */
+WINEMETAL_API mach_port_t MTLTexture_createSharedMachPort(obj_handle_t texture);
+
 WINEMETAL_API obj_handle_t MTLDevice_newSharedBuffer(obj_handle_t device, struct WMTBufferInfo *info,
                                                     mach_port_t *mach_port);
 
