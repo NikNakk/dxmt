@@ -29,7 +29,9 @@ namespace dxmt {
 
 std::atomic_uint64_t global_buffer_seq = {0};
 
-BufferAllocation::BufferAllocation(WMT::Device device, const WMTBufferInfo &info, Flags<BufferAllocationFlag> flags) :
+BufferAllocation::BufferAllocation(
+    WMT::Device device, const WMTBufferInfo &info, Flags<BufferAllocationFlag> flags, mach_port_t shared_port
+) :
     info_(info),
     flags_(flags) {
   // (sub)allocate a minimum of 256B buffer so that texture can be created
@@ -45,7 +47,12 @@ BufferAllocation::BufferAllocation(WMT::Device device, const WMTBufferInfo &info
     placed_buffer = wsi::aligned_malloc(info_.length, DXMT_PAGE_SIZE);
     info_.memory.set(placed_buffer);
   }
-  obj_ = device.newBuffer(info_);
+  if (flags_.test(BufferAllocationFlag::Shared)) {
+    machPort = shared_port;
+    obj_ = device.newSharedBuffer(info_, machPort);
+  } else {
+    obj_ = device.newBuffer(info_);
+  }
   gpuAddress_ = info_.gpu_address;
   mappedMemory_ = info_.memory.get_accessible_or_null();
 };
@@ -186,6 +193,29 @@ Buffer::allocate(Flags<BufferAllocationFlag> flags) {
   info.options = options;
   return new BufferAllocation(device_, info, flags);
 };
+
+Rc<BufferAllocation>
+Buffer::allocateShared(Flags<BufferAllocationFlag> flags) {
+  return importShared(0, flags);
+}
+
+Rc<BufferAllocation>
+Buffer::importShared(mach_port_t mach_port, Flags<BufferAllocationFlag> flags) {
+  // Shared storage only: the pages must be CPU-visible in every process.
+  flags.clr(BufferAllocationFlag::CpuInvisible, BufferAllocationFlag::GpuManaged,
+            BufferAllocationFlag::SuballocateFromOnePage, BufferAllocationFlag::CpuPlaced);
+  flags.set(BufferAllocationFlag::Shared);
+  WMTBufferInfo info;
+  info.memory.set(0);
+  info.length = length_;
+  info.options = WMTResourceHazardTrackingModeUntracked;
+  if (flags.test(BufferAllocationFlag::CpuWriteCombined))
+    info.options |= WMTResourceOptionCPUCacheModeWriteCombined;
+  Rc<BufferAllocation> allocation = new BufferAllocation(device_, info, flags, mach_port);
+  if (!allocation->buffer().handle)
+    return nullptr;
+  return allocation;
+}
 
 Rc<BufferAllocation>
 Buffer::allocate(Flags<BufferAllocationFlag> flags, WMT::Heap heap, uint64_t heap_offset) {

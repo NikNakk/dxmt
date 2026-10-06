@@ -41,6 +41,8 @@ enum class BufferAllocationFlag : uint32_t {
   SuballocateFromOnePage = 5,
   CpuPlaced = 6,
   AllocatedOnHeap = 7,
+  /* pages shared with other processes through a Mach memory entry */
+  Shared = 8,
 };
 
 struct BufferViewKey {
@@ -110,6 +112,9 @@ public:
     return gpuAddress_;
   }
 
+  /* Memory-entry send right of a Shared allocation, 0 otherwise. */
+  mach_port_t machPort = 0;
+
   void
   useSuballocation(uint32_t suballocation) noexcept {
     current_suballocation_ = suballocation;
@@ -147,7 +152,8 @@ public:
   small_vector<GenericAccessTracker, 1> fenceTrackers;
 
 private:
-  BufferAllocation(WMT::Device device, const WMTBufferInfo &info, Flags<BufferAllocationFlag> flags);
+  BufferAllocation(WMT::Device device, const WMTBufferInfo &info, Flags<BufferAllocationFlag> flags,
+                   mach_port_t shared_port = 0);
   BufferAllocation(
       WMT::Device device, const WMTBufferInfo &info, Flags<BufferAllocationFlag> flags, WMT::Heap heap,
       uint64_t heap_offset
@@ -185,6 +191,9 @@ public:
 
   Rc<BufferAllocation> allocate(Flags<BufferAllocationFlag> flags);
   Rc<BufferAllocation> allocate(Flags<BufferAllocationFlag> flags, WMT::Heap heap, uint64_t heap_offset);
+  /* Shared-storage allocation that another process can map (Shared flag). */
+  Rc<BufferAllocation> allocateShared(Flags<BufferAllocationFlag> flags);
+  Rc<BufferAllocation> importShared(mach_port_t mach_port, Flags<BufferAllocationFlag> flags);
 
   Rc<BufferAllocation> rename(Rc<BufferAllocation> &&newAllocation);
 

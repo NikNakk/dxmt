@@ -1071,6 +1071,18 @@ MTLDevice_importSharedTexture(obj_handle_t device, const char *name, struct WMTT
 }
 
 WINEMETAL_API obj_handle_t
+MTLDevice_newSharedBuffer(obj_handle_t device, struct WMTBufferInfo *info, mach_port_t *mach_port) {
+  if (!info || !mach_port) return 0;
+  struct unixcall_mtldevice_newsharedbuffer params = {0};
+  params.device = device;
+  WMT_MEMPTR_SET(params.info, info);
+  params.mach_port = *mach_port;
+  UNIX_CALL(150, &params);
+  *mach_port = params.mach_port;
+  return params.ret;
+}
+
+WINEMETAL_API obj_handle_t
 MTLDevice_importSharedEvent(obj_handle_t device, const char *name) {
   if (!name || strnlen(name, 128) == 128) return 0;
   struct unixcall_mtldevice_importtexture params = {0};
