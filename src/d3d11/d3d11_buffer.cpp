@@ -42,6 +42,8 @@ private:
   bool allow_raw_view;
 
   Rc<DynamicBuffer> dynamic_;
+  D3DKMT_HANDLE local_kmt_ = 0;
+  D3DKMT_HANDLE global_kmt_ = 0;
 
   using SRVBase = TResourceViewBase<tag_shader_resource_view<D3D11Buffer>>;
 
@@ -116,6 +118,48 @@ public:
     if (!(desc.BindFlags & kD3D11OutputBindFlags)) {
       dynamic_ = new DynamicBuffer(buffer_.ptr(), flags);
     }
+  }
+
+  /*
+   * Buffer over a shared allocation (created here or imported from another
+   * process). There is no DynamicBuffer: renaming would detach this buffer
+   * from the other processes, so updates are copied into the one allocation.
+   */
+  D3D11Buffer(
+      const tag_buffer::DESC1 *pDesc, Rc<Buffer> &&shared_buffer, D3DKMT_HANDLE localHandle,
+      D3DKMT_HANDLE globalHandle, MTLD3D11Device *device
+  ) :
+      TResourceBase<tag_buffer>(*pDesc, device),
+      local_kmt_(localHandle),
+      global_kmt_(globalHandle) {
+    buffer_ = std::move(shared_buffer);
+    structured = pDesc->MiscFlags & D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    allow_raw_view = pDesc->MiscFlags & D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+  }
+
+  ~D3D11Buffer() {
+    DestroySharedResourceHandle(m_parent, local_kmt_);
+  }
+
+  HRESULT
+  GetSharedHandle(HANDLE *pSharedHandle) override {
+    if (pSharedHandle == nullptr || (desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE))
+      return E_INVALIDARG;
+    if (!(desc.MiscFlags & D3D11_RESOURCE_MISC_SHARED)) {
+      *pSharedHandle = NULL;
+      return S_OK;
+    }
+    if (!global_kmt_)
+      return E_INVALIDARG;
+    *pSharedHandle = reinterpret_cast<HANDLE>(global_kmt_);
+    return S_OK;
+  }
+
+  HRESULT
+  CreateSharedHandle(const SECURITY_ATTRIBUTES *Attributes, DWORD Access, const WCHAR *pName, HANDLE *pNTHandle)
+      override {
+    InitReturnPtr(pNTHandle);
+    return CreateSharedResourceNtHandle(local_kmt_, Attributes, Access, pName, pNTHandle);
   }
 
   HRESULT
@@ -309,11 +353,102 @@ public:
   }
 };
 
+static HRESULT
+CreateSharedBuffer(
+    MTLD3D11Device *pDevice, const D3D11_BUFFER_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData,
+    ID3D11Buffer **ppBuffer
+) {
+  if (pDesc->MiscFlags & D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) {
+    WARN("CreateBuffer: keyed-mutex shared buffers are not supported");
+    return E_INVALIDARG;
+  }
+  if (pDesc->Usage != D3D11_USAGE_DEFAULT || pDesc->CPUAccessFlags) {
+    WARN("CreateBuffer: shared buffers must have default usage and no CPU access");
+    return E_INVALIDARG;
+  }
+  if (!ppBuffer)
+    return S_FALSE;
+  if (!(pDevice->GetLocalD3DKMT() & 0xc0000000)) {
+    ERR("CreateBuffer: Invalid device handle");
+    return E_FAIL;
+  }
+
+  Rc<Buffer> buffer = new Buffer(pDesc->ByteWidth, pDevice->GetMTLDevice());
+  auto allocation = buffer->allocateShared({});
+  if (!allocation || !allocation->machPort) {
+    ERR("CreateBuffer: Failed to allocate shared buffer memory");
+    return E_FAIL;
+  }
+  if (pInitialData)
+    allocation->updateContents(0, pInitialData->pSysMem, pDesc->ByteWidth);
+  // Fresh Mach memory is zero-filled, matching D3D11's uninitialized-buffer behaviour.
+
+  SharedResourceData runtimeData = {};
+  MakeUniqueSharedName(runtimeData.mach_port_name);
+  if (!WMTBootstrapRegister(runtimeData.mach_port_name, allocation->machPort)) {
+    ERR("CreateBuffer: Failed to register mach port for shared buffer");
+    return E_FAIL;
+  }
+  runtimeData.dimension = D3D11_RESOURCE_DIMENSION_BUFFER;
+  runtimeData.desc.desc_buffer = *pDesc;
+  auto _ = buffer->rename(std::move(allocation));
+
+  D3DKMT_CREATEALLOCATION create = {};
+  create.hDevice = pDevice->GetLocalD3DKMT();
+  create.pPrivateRuntimeData = &runtimeData;
+  create.PrivateRuntimeDataSize = sizeof(runtimeData);
+  create.Flags.StandardAllocation = 1;
+  create.NumAllocations = 1;
+  D3DDDI_ALLOCATIONINFO2 allocationInfo = {};
+  create.pAllocationInfo2 = &allocationInfo;
+  D3DKMT_CREATESTANDARDALLOCATION standardAllocation = {};
+  create.pStandardAllocation = &standardAllocation;
+  standardAllocation.Type = D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP;
+  create.Flags.ExistingSysMem = 1;
+  D3DDDI_ALLOCATIONINFO systemMem;
+  allocationInfo.pSystemMem = &systemMem;
+  create.Flags.CreateResource = 1;
+  create.Flags.CreateShared = 1;
+  create.Flags.NtSecuritySharing = !!(pDesc->MiscFlags & D3D11_RESOURCE_MISC_SHARED_NTHANDLE);
+  if (D3DKMTCreateAllocation2(&create)) {
+    ERR("CreateBuffer: Failed to create D3DKMT for shared buffer");
+    return E_FAIL;
+  }
+
+  *ppBuffer = reinterpret_cast<ID3D11Buffer *>(
+      ref(new D3D11Buffer(pDesc, std::move(buffer), create.hResource, create.hGlobalShare, pDevice))
+  );
+  return S_OK;
+}
+
+HRESULT
+ImportSharedBuffer(MTLD3D11Device *pDevice, const D3D11_BUFFER_DESC *pDesc, mach_port_t MachPort,
+                   D3DKMT_HANDLE hLocal, D3DKMT_HANDLE hGlobal, REFIID riid, void **ppBuffer) {
+  if (!pDesc->ByteWidth || pDesc->Usage != D3D11_USAGE_DEFAULT) {
+    WARN("ImportSharedBuffer: Unexpected shared buffer description");
+    DestroySharedResourceHandle(pDevice, hLocal);
+    return E_INVALIDARG;
+  }
+  Rc<Buffer> buffer = new Buffer(pDesc->ByteWidth, pDevice->GetMTLDevice());
+  auto allocation = buffer->importShared(MachPort, {});
+  if (!allocation) {
+    ERR("ImportSharedBuffer: Failed to map shared buffer memory");
+    DestroySharedResourceHandle(pDevice, hLocal);
+    return E_FAIL;
+  }
+  auto _ = buffer->rename(std::move(allocation));
+  Com<D3D11Buffer> imported = ref(new D3D11Buffer(pDesc, std::move(buffer), hLocal, hGlobal, pDevice));
+  return imported->QueryInterface(riid, ppBuffer);
+}
+
 HRESULT
 CreateBuffer(
     MTLD3D11Device *pDevice, const D3D11_BUFFER_DESC *pDesc, const D3D11_SUBRESOURCE_DATA *pInitialData,
     ID3D11Buffer **ppBuffer
 ) {
+  if (pDesc->MiscFlags &
+      (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX))
+    return CreateSharedBuffer(pDevice, pDesc, pInitialData, ppBuffer);
   *ppBuffer = reinterpret_cast<ID3D11Buffer *>(ref(new D3D11Buffer(pDesc, pInitialData, pDevice)));
   return S_OK;
 }
