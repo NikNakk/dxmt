@@ -1996,6 +1996,15 @@ WINEMETAL_API obj_handle_t MTLDevice_importSharedTexture(obj_handle_t device, co
                                                        struct WMTTextureInfo *expected_info);
 WINEMETAL_API obj_handle_t MTLDevice_importSharedEvent(obj_handle_t device, const char *name);
 
+/*
+ * Shared-storage buffer whose pages are shared through a Mach memory entry.
+ * With *mach_port == 0, allocates new memory and returns its memory-entry send
+ * right in *mach_port. Otherwise maps the given memory entry (which must cover
+ * info->length rounded up to 16 KiB). Returns 0 on failure.
+ */
+WINEMETAL_API obj_handle_t MTLDevice_newSharedBuffer(obj_handle_t device, struct WMTBufferInfo *info,
+                                                    mach_port_t *mach_port);
+
 WINEMETAL_API bool WMTBootstrapRegister(const char *name, mach_port_t mach_port);
 
 WINEMETAL_API bool WMTBootstrapLookUp(const char *name, mach_port_t *mach_port);

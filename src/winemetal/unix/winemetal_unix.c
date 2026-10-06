@@ -9,6 +9,7 @@
 #include "objc/objc-runtime.h"
 #include <bootstrap.h>
 #include <mach/mach_port.h>
+#include <mach/mach_vm.h>
 #define WINEMETAL_API
 #include "../winemetal_thunks.h"
 #include "../airconv_thunks.h"
@@ -2859,6 +2860,60 @@ _MTLDevice_importSharedTexture(void *obj) {
   return STATUS_SUCCESS;
 }
 
+/* Shared buffers: Metal cannot export a buffer, so the pages come from a Mach
+ * memory entry that another process maps; both sides wrap the same pages with
+ * newBufferWithBytesNoCopy. 16 KiB alignment satisfies Metal under Rosetta. */
+#define SHARED_BUFFER_ALIGN 0x4000ull
+
+static NTSTATUS
+_MTLDevice_newSharedBuffer(void *obj) {
+  struct unixcall_mtldevice_newsharedbuffer *params = obj;
+  id<MTLDevice> device = (id<MTLDevice>)params->device;
+  struct WMTBufferInfo *info = params->info.ptr;
+  mach_vm_size_t size = (info->length + SHARED_BUFFER_ALIGN - 1) & ~(SHARED_BUFFER_ALIGN - 1);
+  mach_vm_address_t addr = 0;
+  mach_port_t entry = params->mach_port;
+  bool created = false;
+  kern_return_t kr;
+  params->ret = 0;
+  if ((info->options & (MTLResourceStorageModePrivate | MTLResourceStorageModeManaged)) || !size)
+    return STATUS_SUCCESS;
+  if (!entry) {
+    kr = mach_vm_map(mach_task_self(), &addr, size, SHARED_BUFFER_ALIGN - 1, VM_FLAGS_ANYWHERE, MEMORY_OBJECT_NULL, 0,
+                     FALSE, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS) return STATUS_SUCCESS;
+    memory_object_size_t entry_size = size;
+    kr = mach_make_memory_entry_64(mach_task_self(), &entry_size, addr,
+                                   VM_PROT_READ | VM_PROT_WRITE | MAP_MEM_VM_SHARE, &entry, MACH_PORT_NULL);
+    if (kr != KERN_SUCCESS || entry_size < size) {
+      if (kr == KERN_SUCCESS) mach_port_deallocate(mach_task_self(), entry);
+      mach_vm_deallocate(mach_task_self(), addr, size);
+      return STATUS_SUCCESS;
+    }
+    created = true;
+  } else {
+    kr = mach_vm_map(mach_task_self(), &addr, size, SHARED_BUFFER_ALIGN - 1, VM_FLAGS_ANYWHERE, entry, 0, FALSE,
+                     VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS) return STATUS_SUCCESS;
+  }
+  id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:(void *)addr
+                                                   length:size
+                                                  options:(enum MTLResourceOptions)info->options
+                                              deallocator:^(void *pointer, NSUInteger length) {
+                                                mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)pointer, length);
+                                              }];
+  if (!buffer) {
+    mach_vm_deallocate(mach_task_self(), addr, size);
+    if (created) mach_port_deallocate(mach_task_self(), entry);
+    return STATUS_SUCCESS;
+  }
+  info->memory.ptr = (void *)addr;
+  info->gpu_address = [buffer gpuAddress];
+  params->mach_port = entry;
+  params->ret = (obj_handle_t)buffer;
+  return STATUS_SUCCESS;
+}
+
 extern kern_return_t bootstrap_register2(mach_port_t bp, name_t service_name, mach_port_t sp, int flags);
 
 static NTSTATUS
@@ -3451,6 +3506,7 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLTexture_getBytes,
     &_MTLDevice_importSharedTexture,
     &_MTLDevice_importSharedEvent,
+    &_MTLDevice_newSharedBuffer,
 };
 
 #ifndef DXMT_NATIVE
@@ -3603,5 +3659,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLTexture_getBytes,
     &_MTLDevice_importSharedTexture,
     &_MTLDevice_importSharedEvent,
+    &_MTLDevice_newSharedBuffer,
 };
 #endif
