@@ -43,7 +43,7 @@ const GUID kGpaUUID = {0xccffef16,
                        {0xbc, 0xe3, 0xcd, 0x95, 0x33, 0x69, 0xa3, 0x9a}};
 
 class MTLD3D11DeviceImpl final : public MTLD3D11Device, public IMTLD3D11DeviceExt, public IMTLSwapChainFactory,
-                               public IDXMTNativeDevice, public IDXMTNativeDevice2 {
+                               public IDXMTNativeDevice, public IDXMTNativeDevice2, public IDXMTNativeDevice3 {
 friend class MTLD3D11DXGIDevice;
 public:
   MTLD3D11DeviceImpl(
@@ -98,6 +98,10 @@ public:
 
   HRESULT STDMETHODCALLTYPE ImportMetalSharedEvent(UINT64 event, ID3D11Fence **out) override {
     return ImportNativeEventObject(this, event, out);
+  }
+
+  HRESULT STDMETHODCALLTYPE CreateSharedTextureHandle(ID3D11Texture2D *texture, HANDLE *handle) override {
+    return ExportSharedTexture(this, texture, handle);
   }
 
   bool IsTraced() override { return is_traced_; }
@@ -1221,6 +1225,10 @@ public:
 
     if (riid == DXMT_IID_NATIVE_DEVICE2) {
       *ppvObject = ref_and_cast<IDXMTNativeDevice2>(&d3d11_device_);
+      return S_OK;
+    }
+    if (riid == DXMT_IID_NATIVE_DEVICE3) {
+      *ppvObject = ref_and_cast<IDXMTNativeDevice3>(&d3d11_device_);
       return S_OK;
     }
 

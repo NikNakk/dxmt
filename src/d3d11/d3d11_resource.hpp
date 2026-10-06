@@ -538,6 +538,8 @@ HRESULT ImportNativeTextureObject(MTLD3D11Device *device, uint64_t object,
 
 HRESULT ImportSharedTexture(MTLD3D11Device *pDevice, HANDLE hResource, REFIID riid, void **ppTexture);
 
+HRESULT ExportSharedTexture(MTLD3D11Device *pDevice, ID3D11Texture2D *pTexture, HANDLE *pHandle);
+
 HRESULT ImportNativeSharedTexture(MTLD3D11Device *device, const char *name,
                                  const D3D11_TEXTURE2D_DESC *desc, ID3D11Texture2D **texture);
 

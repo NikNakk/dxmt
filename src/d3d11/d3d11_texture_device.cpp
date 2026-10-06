@@ -311,6 +311,65 @@ public:
     return CreateSharedResourceNtHandle(local_kmt_, Attributes, Access, pName, pNTHandle);
   }
 
+  /* Publish this texture's existing Metal storage for other processes, as
+   * creation with D3D11_RESOURCE_MISC_SHARED would. See IDXMTNativeDevice3. */
+  HRESULT
+  ExportShared(HANDLE *pSharedHandle) {
+    if (global_kmt_) {
+      *pSharedHandle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(global_kmt_));
+      return S_OK;
+    }
+    if (this->desc.MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE |
+                                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX))
+      return E_INVALIDARG; // created shared: use GetSharedHandle/CreateSharedHandle
+    if (!(this->m_parent->GetLocalD3DKMT() & 0xc0000000)) {
+      ERR("ExportShared: Invalid device handle");
+      return E_FAIL;
+    }
+    TextureAllocation *allocation = this->texture_->current();
+    mach_port_t mach_port = allocation ? MTLTexture_createSharedMachPort(allocation->texture().handle) : 0;
+    if (!mach_port) {
+      WARN("ExportShared: texture storage is not shareable");
+      return DXGI_ERROR_UNSUPPORTED;
+    }
+    SharedResourceData runtimeData = {};
+    MakeUniqueSharedName(runtimeData.mach_port_name);
+    if (!WMTBootstrapRegister(runtimeData.mach_port_name, mach_port)) {
+      ERR("ExportShared: Failed to register mach port");
+      return E_FAIL;
+    }
+    typename tag_texture::DESC1 shared_desc = this->desc;
+    shared_desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
+    runtimeData.dimension = tag_texture::dimension;
+    memcpy(&runtimeData.desc, &shared_desc, sizeof(shared_desc));
+
+    D3DKMT_CREATEALLOCATION create = {};
+    create.hDevice = this->m_parent->GetLocalD3DKMT();
+    create.pPrivateRuntimeData = &runtimeData;
+    create.PrivateRuntimeDataSize = sizeof(runtimeData);
+    create.Flags.StandardAllocation = 1;
+    create.NumAllocations = 1;
+    D3DDDI_ALLOCATIONINFO2 allocationInfo = {};
+    create.pAllocationInfo2 = &allocationInfo;
+    D3DKMT_CREATESTANDARDALLOCATION standardAllocation = {};
+    create.pStandardAllocation = &standardAllocation;
+    standardAllocation.Type = D3DKMT_STANDARDALLOCATIONTYPE_EXISTINGHEAP;
+    create.Flags.ExistingSysMem = 1;
+    D3DDDI_ALLOCATIONINFO systemMem;
+    allocationInfo.pSystemMem = &systemMem;
+    create.Flags.CreateResource = 1;
+    create.Flags.CreateShared = 1;
+    if (D3DKMTCreateAllocation2(&create)) {
+      ERR("ExportShared: Failed to create D3DKMT resource");
+      return E_FAIL;
+    }
+    local_kmt_ = create.hResource;
+    global_kmt_ = create.hGlobalShare;
+    this->desc.MiscFlags |= D3D11_RESOURCE_MISC_SHARED;
+    *pSharedHandle = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(global_kmt_));
+    return S_OK;
+  }
+
   void SetMinLOD(float MinLod) override { min_lod = MinLod; }
 
   float GetMinLOD() override { return min_lod; }
@@ -590,6 +649,28 @@ ImportSharedTexture(MTLD3D11Device *pDevice, HANDLE hResource, REFIID riid, void
       pDevice, runtimeData, open.hResource, static_cast<D3DKMT_HANDLE>(reinterpret_cast<uintptr_t>(hResource)), riid,
       ppTexture
   );
+}
+
+HRESULT
+ExportSharedTexture(MTLD3D11Device *pDevice, ID3D11Texture2D *pTexture, HANDLE *pHandle) {
+  if (!pHandle)
+    return E_POINTER;
+  *pHandle = nullptr;
+  if (!pTexture)
+    return E_INVALIDARG;
+  Com<ID3D11Device> owner;
+  pTexture->GetDevice(&owner);
+  Com<ID3D11Device> self;
+  pDevice->QueryInterface(__uuidof(ID3D11Device), reinterpret_cast<void **>(&self));
+  D3D11_TEXTURE2D_DESC desc;
+  pTexture->GetDesc(&desc);
+  // Only DEFAULT textures are DeviceTexture objects.
+  if (owner.ptr() != self.ptr() || desc.Usage != D3D11_USAGE_DEFAULT)
+    return E_INVALIDARG;
+  // DXMT hands out its resources' D3D11 interfaces as reinterpreted
+  // D3D11ResourceCommon pointers (see CreateDeviceTextureInternal).
+  auto *texture = static_cast<DeviceTexture<tag_texture_2d> *>(reinterpret_cast<D3D11ResourceCommon *>(pTexture));
+  return texture->ExportShared(pHandle);
 }
 
 HRESULT

@@ -103,6 +103,12 @@ struct unixcall_mtldevice_importtexture {
   char name[128];
 };
 
+struct unixcall_mtltexture_sharedmachport {
+  obj_handle_t texture;
+  mach_port_t ret;
+  uint32_t padding;
+};
+
 struct unixcall_mtldevice_newsharedbuffer {
   obj_handle_t device;
   struct WMTMemoryPointer info;

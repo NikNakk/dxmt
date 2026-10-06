@@ -2902,6 +2902,21 @@ _MTLDevice_retainEventObject(void *obj) {
   return STATUS_SUCCESS;
 }
 
+static NTSTATUS
+_MTLTexture_createSharedMachPort(void *obj) {
+  struct unixcall_mtltexture_sharedmachport *params = obj;
+  params->ret = 0;
+  @autoreleasepool {
+    id<MTLTexture> texture = (id<MTLTexture>)params->texture;
+    MTLSharedTextureHandle *handle = texture ? [texture newSharedTextureHandle] : nil;
+    if (handle) {
+      params->ret = [handle createMachPort];
+      [handle release];
+    }
+  }
+  return STATUS_SUCCESS;
+}
+
 /* Shared buffers: Metal cannot export a buffer, so the pages come from a Mach
  * memory entry that another process maps; both sides wrap the same pages with
  * newBufferWithBytesNoCopy. 16 KiB alignment satisfies Metal under Rosetta. */
@@ -3551,6 +3566,7 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLDevice_retainTextureObject,
     &_MTLDevice_retainEventObject,
     &_MTLDevice_newSharedBuffer,
+    &_MTLTexture_createSharedMachPort,
 };
 
 #ifndef DXMT_NATIVE
@@ -3706,5 +3722,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLDevice_retainTextureObject,
     &_MTLDevice_retainEventObject,
     &_MTLDevice_newSharedBuffer,
+    &_MTLTexture_createSharedMachPort,
 };
 #endif
