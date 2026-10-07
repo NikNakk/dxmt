@@ -301,6 +301,7 @@ public:
     }
 
     *pSharedHandle = reinterpret_cast<HANDLE>(global_kmt_);
+    DEBUG("share: GetSharedHandle ", tag_texture::debug_name, " -> 0x", str::format(std::hex, global_kmt_));
     return S_OK;
   }
 
@@ -308,7 +309,10 @@ public:
   CreateSharedHandle(const SECURITY_ATTRIBUTES *Attributes, DWORD Access, const WCHAR *pName, HANDLE *pNTHandle)
       override {
     InitReturnPtr(pNTHandle);
-    return CreateSharedResourceNtHandle(local_kmt_, Attributes, Access, pName, pNTHandle);
+    HRESULT hr = CreateSharedResourceNtHandle(local_kmt_, Attributes, Access, pName, pNTHandle);
+    DEBUG("share: CreateSharedHandle ", tag_texture::debug_name, " global 0x", str::format(std::hex, global_kmt_), " -> ",
+          pNTHandle ? *pNTHandle : nullptr);
+    return hr;
   }
 
   /* Publish this texture's existing Metal storage for other processes, as
@@ -471,6 +475,10 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
       return E_FAIL;
     }
 
+    DEBUG("share: created ", tag::debug_name, " ", info.width, "x", info.height, " format ", finalDesc.Format,
+          " bind 0x", str::format(std::hex, finalDesc.BindFlags), " misc 0x", str::format(std::hex, finalDesc.MiscFlags),
+          " global 0x", str::format(std::hex, create.hGlobalShare), " mutex 0x",
+          str::format(std::hex, runtimeData.mutex_handle), " initial data ", pInitialData != nullptr);
     initialize(std::move(allocation));
     *ppTexture = reinterpret_cast<typename tag::COM_IMPL *>(
         ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), create.hResource,
@@ -557,9 +565,16 @@ ImportSharedTextureInternal(
   if (hSharedKeyedMutex & 0xc0000000)
     keyed_mutex = KeyedMutex::import(pDevice->GetMTLDevice(), hSharedKeyedMutex);
 
+  DEBUG("share: imported ", tag::debug_name, " ", info.width, "x", info.height, " format ", finalDesc.Format,
+        " bind 0x", str::format(std::hex, finalDesc.BindFlags), " misc 0x", str::format(std::hex, finalDesc.MiscFlags),
+        " global 0x", str::format(std::hex, hGlobal), " mutex 0x", str::format(std::hex, hSharedKeyedMutex),
+        " as ", str::format(riid));
   Com<DeviceTexture<tag>> device_texture =
       ref(new DeviceTexture<tag>(&finalDesc, std::move(texture), hLocal, hGlobal, std::move(keyed_mutex), pDevice));
-  return device_texture->QueryInterface(riid, ppTexture);
+  HRESULT hr = device_texture->QueryInterface(riid, ppTexture);
+  if (FAILED(hr))
+    WARN("ImportSharedTexture: no interface ", str::format(riid));
+  return hr;
 }
 
 /*
@@ -800,6 +815,7 @@ ImportSharedTextureFromNtHandle(MTLD3D11Device *pDevice, HANDLE hResource, REFII
     D3DKMTDestroyKeyedMutex(&destroyMutex);
   }
 
+  DEBUG("share: OpenSharedResource1 ", hResource);
   return ImportSharedResource(pDevice, runtimeData, open.hResource, 0, riid, ppTexture);
 }
 

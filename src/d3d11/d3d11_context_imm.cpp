@@ -625,9 +625,11 @@ public:
   AcquireSync(ID3D11Resource *pResource, UINT64 Key, DWORD dwMilliseconds) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
     auto resource = GetResourceCommon(pResource);
-    if (!resource->keyedMutex())
+    if (!resource->keyedMutex()) {
+      DEBUG("share: AcquireSync on a resource without a keyed mutex: ", pResource);
       return DXGI_ERROR_INVALID_CALL;
-    return resource->keyedMutex()->acquire(
+    }
+    HRESULT hr = resource->keyedMutex()->acquire(
         [&](uint64_t fence) {
           InvalidateCurrentPass(true);
           EmitOP([event = resource->keyedMutex()->sharedEvent(), fence](ArgumentEncodingContext &enc) mutable {
@@ -637,14 +639,18 @@ public:
         },
         Key, dwMilliseconds
     );
+    LogKeyedMutexCall("AcquireSync", resource->keyedMutex()->globalHandle(), Key, hr);
+    return hr;
   }
   HRESULT
   ReleaseSync(ID3D11Resource *pResource, UINT64 Key) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
     auto resource = GetResourceCommon(pResource);
-    if (!resource->keyedMutex())
+    if (!resource->keyedMutex()) {
+      DEBUG("share: ReleaseSync on a resource without a keyed mutex: ", pResource);
       return DXGI_ERROR_INVALID_CALL;
-    return resource->keyedMutex()->release(
+    }
+    HRESULT hr = resource->keyedMutex()->release(
         [&](uint64_t fence) {
           InvalidateCurrentPass(true);
           EmitOP([event = resource->keyedMutex()->sharedEvent(), fence](ArgumentEncodingContext &enc) mutable {
@@ -654,9 +660,21 @@ public:
         },
         Key
     );
+    LogKeyedMutexCall("ReleaseSync", resource->keyedMutex()->globalHandle(), Key, hr);
+    return hr;
   }
 
 private:
+  /* Debug log of keyed mutex use: the first calls, then every 1000th, and
+   * every failure. */
+  void
+  LogKeyedMutexCall(const char *call, D3DKMT_HANDLE handle, UINT64 key, HRESULT hr) {
+    uint64_t count = keyed_mutex_calls_++;
+    if (hr != S_OK || count < 64 || count % 1000 == 0)
+      DEBUG("share: ", call, " mutex 0x", str::format(std::hex, handle), " key ", key, " -> 0x",
+            str::format(std::hex, (uint32_t)hr), " (call ", count, ")");
+  }
+  std::atomic<uint64_t> keyed_mutex_calls_ = 0;
   std::vector<Com<MTLD3D11OcclusionQuery>> pending_occlusion_queries;
   CommandQueue &cmd_queue;
   ContextInternalState ctx_state;
