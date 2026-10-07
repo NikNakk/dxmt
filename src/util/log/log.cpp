@@ -106,6 +106,10 @@ std::string Logger::getFileName(const std::string &base) {
     path += '/';
 
   std::string exeName = env::getExeBaseName();
+  // DXMT_LOG_PID=1: one file per process, for programs that run several
+  // processes from one executable.
+  if (env::getEnvVar("DXMT_LOG_PID") == "1")
+    exeName += "_" + std::to_string(GetCurrentProcessId());
   path += exeName + "_" + base;
   return path;
 }
