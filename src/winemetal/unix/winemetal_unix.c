@@ -1886,6 +1886,12 @@ _WMTHostRemoteLayer(void *obj) {
       [host release];
       [content addSubview:view positioned:NSWindowAbove relativeTo:nil];
       params->ret = (obj_handle_t)view;
+      if (getenv("DXMT_REMOTE_LAYER_DEBUG"))
+        fprintf(stderr, "winemetal: context %u hosted in %s %p (%.0fx%.0f, hidden %d, layer %s) of window %s %p (%.0fx%.0f, opaque %d)\n",
+                context_id, object_getClassName(content), content, content.bounds.size.width,
+                content.bounds.size.height, content.hiddenOrHasHiddenAncestor, object_getClassName(content.layer),
+                object_getClassName(content.window), content.window, content.window.frame.size.width,
+                content.window.frame.size.height, content.window.opaque);
     });
     [content release];
   }
