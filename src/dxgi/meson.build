@@ -6,6 +6,7 @@ dxgi_src = [
   'dxgi_output.cpp',
   'dxgi_options.cpp',
   'dxgi.cpp',
+  '../d3d11/d3d11_remote_layer.cpp',
 ]
 
 dxgi_ld_args      = ['-L' + windows_native_install_dir] # a nice trick to force relink
