@@ -9,6 +9,7 @@
 #include "dxmt_context.hpp"
 #include "dxmt_hud_state.hpp"
 #include "util_env.hpp"
+#include "d3d11_remote_layer.hpp"
 #include "dxmt_statistics.hpp"
 #include "dxmt_presenter.hpp"
 #include "log/log.hpp"
@@ -140,6 +141,11 @@ public:
       abort();
     }
 
+    // Another process's window: that process shows this swapchain's layer.
+    remote_context_id_ = WMT::RemoteLayerContextId(native_view_);
+    if (remote_context_id_)
+      PublishRemoteLayer(hWnd, remote_context_id_);
+
     if constexpr (EnableMetalFX) {
       scale_factor = std::max(Config::getInstance().getOption<float>("d3d11.metalSpatialUpscaleFactor", 2), 1.0f);
     }
@@ -207,6 +213,8 @@ public:
   };
 
   ~MTLD3D11SwapChain() {
+    if (remote_context_id_)
+      WithdrawRemoteLayer(hWnd);
     device_context_->WaitUntilGPUIdle();
     WMT::ReleaseMetalView(native_view_);
     native_view_ = {};
@@ -1065,6 +1073,7 @@ private:
   Com<IMTLDXGIDevice> dxgi_device_;
   WMT::Object native_view_;
   WMT::MetalLayer layer_weak_;
+  uint32_t remote_context_id_ = 0;
   ULONG presentation_count_;
   DXGI_SWAP_CHAIN_DESC1 desc_;
   DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc_;
@@ -1107,9 +1116,9 @@ CreateSwapChain(
   DWORD window_process_id;
   GetWindowThreadProcessId(hWnd, &window_process_id);
   bool cross_process = GetProcessId(GetCurrentProcess()) != window_process_id;
-  if (cross_process && env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN") == "offscreen") {
+  if (cross_process && CrossProcessSwapchainEnabled()) {
     WARN("CreateSwapChain: window ", hWnd, " belongs to pid ", window_process_id,
-         "; presenting offscreen (DXMT_CROSS_PROCESS_SWAPCHAIN=offscreen)");
+         "; DXMT_CROSS_PROCESS_SWAPCHAIN=", env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN"));
   } else if (cross_process) {
     SYSTEMTIME now;
     GetLocalTime(&now);

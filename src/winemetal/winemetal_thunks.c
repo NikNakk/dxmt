@@ -1078,6 +1078,23 @@ MTLTexture_createSharedMachPort(obj_handle_t texture) {
   return params.ret;
 }
 
+WINEMETAL_API uint32_t
+WMTRemoteLayerContextId(obj_handle_t view) {
+  struct unixcall_generic_obj_uint64_ret params = {0};
+  params.handle = view;
+  UNIX_CALL(152, &params);
+  return (uint32_t)params.ret;
+}
+
+WINEMETAL_API obj_handle_t
+WMTHostRemoteLayer(intptr_t hwnd, uint32_t context_id) {
+  struct unixcall_generic_obj_uint64_obj_ret params = {0};
+  params.handle = (obj_handle_t)(uint64_t)hwnd;
+  params.arg = context_id;
+  UNIX_CALL(153, &params);
+  return params.ret;
+}
+
 WINEMETAL_API obj_handle_t
 MTLDevice_newSharedBuffer(obj_handle_t device, struct WMTBufferInfo *info, mach_port_t *mach_port) {
   if (!info || !mach_port) return 0;

@@ -2009,6 +2009,13 @@ WINEMETAL_API obj_handle_t MTLDevice_retainEventObject(obj_handle_t device, obj_
  * texture was not created shareable. The caller owns the send right. */
 WINEMETAL_API mach_port_t MTLTexture_createSharedMachPort(obj_handle_t texture);
 
+/* Cross-process presentation (DXMT_CROSS_PROCESS_SWAPCHAIN=host): the
+ * CAContext id of a view made for another process's window (0 if it is not
+ * one), and, in the window's process, a view showing that context. Release
+ * the returned view with ReleaseMetalView. */
+WINEMETAL_API uint32_t WMTRemoteLayerContextId(obj_handle_t view);
+WINEMETAL_API obj_handle_t WMTHostRemoteLayer(intptr_t hwnd, uint32_t context_id);
+
 WINEMETAL_API obj_handle_t MTLDevice_newSharedBuffer(obj_handle_t device, struct WMTBufferInfo *info,
                                                     mach_port_t *mach_port);
 

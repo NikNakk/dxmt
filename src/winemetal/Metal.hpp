@@ -1118,6 +1118,16 @@ ReleaseMetalView(Object view) {
   return ::ReleaseMetalView(view.handle);
 }
 
+inline uint32_t
+RemoteLayerContextId(Object view) {
+  return ::WMTRemoteLayerContextId(view.handle);
+}
+
+inline Object
+HostRemoteLayer(intptr_t hwnd, uint32_t context_id) {
+  return {::WMTHostRemoteLayer(hwnd, context_id)};
+}
+
 inline void
 InitializeRenderPassInfo(WMTRenderPassInfo &info) {
   std::memset(&info, 0, sizeof(WMTRenderPassInfo));

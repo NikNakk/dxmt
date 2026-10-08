@@ -1621,6 +1621,8 @@ _MTLDevice_supportsFXTemporalScaler(void *obj) {
   return STATUS_SUCCESS;
 }
 
+static void dxmt_remote_layer_fit(CAMetalLayer *layer);
+
 static NTSTATUS
 _MetalLayer_setProps(void *obj) {
   struct unixcall_generic_obj_constptr_noret *params = obj;
@@ -1634,6 +1636,7 @@ _MetalLayer_setProps(void *obj) {
     layer.displaySyncEnabled = props->display_sync_enabled;
     layer.drawableSize = CGSizeMake(props->drawable_width, props->drawable_height);
     layer.pixelFormat = to_metal_pixel_format(props->pixel_format);
+    dxmt_remote_layer_fit(layer);
   });
   return STATUS_SUCCESS;
 }
@@ -1700,6 +1703,46 @@ struct macdrv_functions_t {
 }
 @end
 
+/* Cross-process presentation (DXMT_CROSS_PROCESS_SWAPCHAIN=host). A swapchain
+ * for another process's window renders into a layer attached to a CAContext;
+ * the window's process shows that context through a CALayerHost. These are
+ * private QuartzCore interfaces, declared and checked at runtime as Chromium
+ * does (ui/base/cocoa/remote_layer_api). */
+typedef uint32_t DXMTCAContextID;
+
+@interface CAContext : NSObject
++ (instancetype)contextWithCGSConnection:(DXMTCAContextID)connection options:(NSDictionary *)options;
+@property(readonly) DXMTCAContextID contextId;
+@property(retain) CALayer *layer;
+@end
+
+@interface CALayerHost : CALayer
+@property DXMTCAContextID contextId;
+@end
+
+static const char dxmt_remote_layer_key = 0;
+
+static bool
+dxmt_remote_layer_supported(void) {
+  Class context_class = NSClassFromString(@"CAContext");
+  Class host_class = NSClassFromString(@"CALayerHost");
+  return context_class && [context_class respondsToSelector:@selector(contextWithCGSConnection:options:)] &&
+         class_getProperty(context_class, "contextId") && class_getProperty(context_class, "layer") && host_class &&
+         [host_class instancesRespondToSelector:@selector(setContextId:)] &&
+         dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
+}
+
+/* Sizes a remote layer from its drawable; nothing else lays it out. */
+static void
+dxmt_remote_layer_fit(CAMetalLayer *layer) {
+  if (!objc_getAssociatedObject(layer, &dxmt_remote_layer_key)) return;
+  CGFloat scale = layer.contentsScale > 0 ? layer.contentsScale : 1;
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  layer.frame = CGRectMake(0, 0, layer.drawableSize.width / scale, layer.drawableSize.height / scale);
+  [CATransaction commit];
+}
+
 static void
 create_wine_window_metal_view(struct unixcall_create_metal_view_from_hwnd *params) {
   execute_on_main(^{
@@ -1755,6 +1798,21 @@ _CreateMetalViewFromHWND(void *obj) {
        * its browser process). DXMT_CROSS_PROCESS_SWAPCHAIN=offscreen gives it a
        * layer in no window, so creation succeeds and presents are discarded. */
       const char *mode = getenv("DXMT_CROSS_PROCESS_SWAPCHAIN");
+      if (mode && !strcmp(mode, "host") && dxmt_remote_layer_supported()) {
+        execute_on_main(^{
+          CAMetalLayer *layer = [CAMetalLayer layer];
+          layer.device = (id<MTLDevice>)params->device;
+          layer.anchorPoint = CGPointZero;
+          objc_setAssociatedObject(layer, &dxmt_remote_layer_key, @YES, OBJC_ASSOCIATION_RETAIN);
+          uint32_t (*main_connection)(void) = dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
+          CAContext *context =
+              [[NSClassFromString(@"CAContext") contextWithCGSConnection:main_connection() options:@{}] retain];
+          context.layer = layer;
+          params->ret_view = (obj_handle_t)context;
+          params->ret_layer = (obj_handle_t)layer;
+        });
+        return STATUS_SUCCESS;
+      }
       if (!mode || strcmp(mode, "offscreen")) return STATUS_UNSUCCESSFUL;
       execute_on_main(^{
         DXMTWineMetalView *view = [[DXMTWineMetalView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
@@ -1782,8 +1840,71 @@ _CreateMetalViewFromHWND(void *obj) {
 }
 
 static NTSTATUS
+_WMTRemoteLayerContextId(void *obj) {
+  struct unixcall_generic_obj_uint64_ret *params = obj;
+  Class context_class = NSClassFromString(@"CAContext");
+  id view = (id)params->handle;
+  params->ret = context_class && [view isKindOfClass:context_class] ? ((CAContext *)view).contextId : 0;
+  return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+_WMTHostRemoteLayer(void *obj) {
+  struct unixcall_generic_obj_uint64_obj_ret *params = obj;
+  params->ret = NULL_OBJECT_HANDLE;
+  if (!dxmt_remote_layer_supported()) return STATUS_UNSUCCESSFUL;
+
+  struct macdrv_win_data *(*pfn_get_win_data)(HWND hwnd) = NULL;
+  void (*pfn_release_win_data)(struct macdrv_win_data *data) = NULL;
+  struct macdrv_functions_t *macdrv_functions;
+  if ((macdrv_functions = dlsym(RTLD_DEFAULT, "macdrv_functions"))) {
+    pfn_get_win_data = macdrv_functions->get_win_data;
+    pfn_release_win_data = macdrv_functions->release_win_data;
+  } else {
+    pfn_get_win_data = dlsym(RTLD_DEFAULT, "get_win_data");
+    pfn_release_win_data = dlsym(RTLD_DEFAULT, "release_win_data");
+  }
+  if (!pfn_get_win_data || !pfn_release_win_data) return STATUS_UNSUCCESSFUL;
+  struct macdrv_win_data *win_data = pfn_get_win_data((HWND)params->handle);
+  if (!win_data) return STATUS_UNSUCCESSFUL;
+  /* Not on AppKit's thread while holding the window data lock. */
+  NSView *content = [(NSView *)win_data->client_cocoa_view retain];
+  pfn_release_win_data(win_data);
+  DXMTCAContextID context_id = (DXMTCAContextID)params->arg;
+  if (content) {
+    execute_on_main(^{
+      DXMTWineMetalView *view = [[DXMTWineMetalView alloc] initWithFrame:content.bounds];
+      view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      CALayerHost *host = [[NSClassFromString(@"CALayerHost") alloc] init];
+      host.contextId = context_id;
+      host.anchorPoint = CGPointZero;
+      /* The remote layer's origin is its top left; AppKit's is bottom left. */
+      view.wantsLayer = YES;
+      view.layer = [CALayer layer];
+      view.layer.geometryFlipped = YES;
+      [view.layer addSublayer:host];
+      [host release];
+      [content addSubview:view positioned:NSWindowAbove relativeTo:nil];
+      params->ret = (obj_handle_t)view;
+    });
+    [content release];
+  }
+  return params->ret ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+}
+
+static NTSTATUS
 _ReleaseMetalView(void *obj) {
   struct unixcall_generic_obj_noret *params = obj;
+
+  Class context_class = NSClassFromString(@"CAContext");
+  if (context_class && [(id)params->handle isKindOfClass:context_class]) {
+    execute_on_main(^{
+      CAContext *context = (CAContext *)params->handle;
+      context.layer = nil;
+      [context release];
+    });
+    return STATUS_SUCCESS;
+  }
 
   if ([(id)params->handle isKindOfClass:[DXMTWineMetalView class]]) {
     execute_on_main(^{
@@ -3583,6 +3704,8 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLDevice_retainEventObject,
     &_MTLDevice_newSharedBuffer,
     &_MTLTexture_createSharedMachPort,
+    &_WMTRemoteLayerContextId,
+    &_WMTHostRemoteLayer,
 };
 
 #ifndef DXMT_NATIVE
@@ -3739,5 +3862,7 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLDevice_retainEventObject,
     &_MTLDevice_newSharedBuffer,
     &_MTLTexture_createSharedMachPort,
+    &_WMTRemoteLayerContextId,
+    &_WMTHostRemoteLayer,
 };
 #endif

@@ -230,11 +230,14 @@ extern "C" HRESULT __stdcall D3D11On12CreateDevice(
 
 #ifdef _WIN32
 
+#include "d3d11_remote_layer.hpp"
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {  
   if (reason != DLL_PROCESS_ATTACH)
     return TRUE;
 
   DisableThreadLibraryCalls(instance);
+  dxmt::StartRemoteLayerHost();
   return TRUE;
 }
 
