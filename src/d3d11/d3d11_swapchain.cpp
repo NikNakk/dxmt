@@ -511,12 +511,7 @@ public:
     }
 
     ApplyLayerProps();
-    if (remote_context_id_) {
-      // Fill the other process's window, as a swapchain does on Windows.
-      RECT client = {};
-      GetClientRect(hWnd, &client);
-      WMT::SetRemoteLayerFrame(layer_weak_, client.right - client.left, client.bottom - client.top);
-    }
+    FitRemoteLayer();
 
     backbuffer_desc_.Format = desc_.Format;
 
@@ -770,6 +765,10 @@ public:
 
     if (should_exit_fs)
       SetFullscreenState(FALSE, nullptr);
+
+    // Another process's window may be sized after its swapchain is made.
+    if (remote_context_id_ && ++remote_fit_presents_ % 30 == 0)
+      FitRemoteLayer();
 
     std::unique_lock<d3d11_device_mutex> lock(device_->mutex);
 
@@ -1080,6 +1079,28 @@ private:
   WMT::Object native_view_;
   WMT::MetalLayer layer_weak_;
   uint32_t remote_context_id_ = 0;
+  uint32_t remote_fit_presents_ = 0;
+  uint32_t remote_width_ = 0, remote_height_ = 0;
+
+  // Fill another process's window with this swapchain's layer, as a swapchain
+  // does on Windows: its client area, or the buffers' size while that is empty.
+  void
+  FitRemoteLayer() {
+    if (!remote_context_id_)
+      return;
+    RECT client = {};
+    GetClientRect(hWnd, &client);
+    uint32_t width = client.right - client.left, height = client.bottom - client.top;
+    if (!width || !height) {
+      width = desc_.Width;
+      height = desc_.Height;
+    }
+    if (width == remote_width_ && height == remote_height_)
+      return;
+    remote_width_ = width;
+    remote_height_ = height;
+    WMT::SetRemoteLayerFrame(layer_weak_, width, height);
+  }
   ULONG presentation_count_;
   DXGI_SWAP_CHAIN_DESC1 desc_;
   DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen_desc_;
