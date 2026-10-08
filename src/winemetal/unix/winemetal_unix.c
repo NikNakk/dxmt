@@ -1882,6 +1882,10 @@ _WMTHostRemoteLayer(void *obj) {
       view.wantsLayer = YES;
       view.layer = [CALayer layer];
       view.layer.geometryFlipped = YES;
+      /* Stay above sibling views made later, such as Wine's views for the
+       * window's own children (Chromium's "Chrome Legacy Window" covers the
+       * whole page and would hide the content). */
+      view.layer.zPosition = 1e6;
       [view.layer addSublayer:host];
       [host release];
       [content addSubview:view positioned:NSWindowAbove relativeTo:nil];
