@@ -1750,7 +1750,23 @@ _CreateMetalViewFromHWND(void *obj) {
   if (pfn_get_win_data && pfn_release_win_data && pfn_macdrv_view_create_metal_view &&
       pfn_macdrv_view_get_metal_layer) {
     struct macdrv_win_data *win_data = pfn_get_win_data((HWND)params->hwnd);
-    if (!win_data) return STATUS_UNSUCCESSFUL;
+    if (!win_data) {
+      /* Another process's window (for example a Chromium GPU process drawing for
+       * its browser process). DXMT_CROSS_PROCESS_SWAPCHAIN=offscreen gives it a
+       * layer in no window, so creation succeeds and presents are discarded. */
+      const char *mode = getenv("DXMT_CROSS_PROCESS_SWAPCHAIN");
+      if (!mode || strcmp(mode, "offscreen")) return STATUS_UNSUCCESSFUL;
+      execute_on_main(^{
+        DXMTWineMetalView *view = [[DXMTWineMetalView alloc] initWithFrame:NSMakeRect(0, 0, 1, 1)];
+        CAMetalLayer *layer = [CAMetalLayer layer];
+        layer.device = (id<MTLDevice>)params->device;
+        view.wantsLayer = YES;
+        view.layer = layer;
+        params->ret_view = (obj_handle_t)view;
+        params->ret_layer = (obj_handle_t)layer;
+      });
+      return STATUS_SUCCESS;
+    }
     macdrv_metal_view view =
         pfn_macdrv_view_create_metal_view(win_data->client_cocoa_view, (macdrv_metal_device)params->device);
     params->ret_view = (obj_handle_t)view;

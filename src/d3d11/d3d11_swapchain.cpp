@@ -8,6 +8,7 @@
 #include "d3d11_context.hpp"
 #include "dxmt_context.hpp"
 #include "dxmt_hud_state.hpp"
+#include "util_env.hpp"
 #include "dxmt_statistics.hpp"
 #include "dxmt_presenter.hpp"
 #include "log/log.hpp"
@@ -1105,8 +1106,20 @@ CreateSwapChain(
 
   DWORD window_process_id;
   GetWindowThreadProcessId(hWnd, &window_process_id);
-  if (GetProcessId(GetCurrentProcess()) != window_process_id) {
-    ERR("CreateSwapChain: cross-process swapchain not supported yet");
+  bool cross_process = GetProcessId(GetCurrentProcess()) != window_process_id;
+  if (cross_process && env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN") == "offscreen") {
+    WARN("CreateSwapChain: window ", hWnd, " belongs to pid ", window_process_id,
+         "; presenting offscreen (DXMT_CROSS_PROCESS_SWAPCHAIN=offscreen)");
+  } else if (cross_process) {
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+    char klass[64] = "", title[64] = "";
+    GetClassNameA(hWnd, klass, sizeof(klass));
+    GetWindowTextA(hWnd, title, sizeof(title));
+    ERR("CreateSwapChain: cross-process swapchain not supported yet (", env::getExeBaseName(), " pid ",
+        GetCurrentProcessId(), ", window ", hWnd, " class '", klass, "' title '", title, "' of pid ",
+        window_process_id, ", ", pDesc->Width, "x", pDesc->Height, ", at ", now.wHour, ":", now.wMinute, ":",
+        now.wSecond, ".", now.wMilliseconds, ")");
     return E_FAIL;
   }
 
