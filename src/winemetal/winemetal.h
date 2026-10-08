@@ -2015,6 +2015,8 @@ WINEMETAL_API mach_port_t MTLTexture_createSharedMachPort(obj_handle_t texture);
  * the returned view with ReleaseMetalView. */
 WINEMETAL_API uint32_t WMTRemoteLayerContextId(obj_handle_t view);
 WINEMETAL_API obj_handle_t WMTHostRemoteLayer(intptr_t hwnd, uint32_t context_id);
+/* The size of such a view's layer in the other process's window. */
+WINEMETAL_API void WMTSetRemoteLayerFrame(obj_handle_t layer, uint32_t width, uint32_t height);
 
 WINEMETAL_API obj_handle_t MTLDevice_newSharedBuffer(obj_handle_t device, struct WMTBufferInfo *info,
                                                     mach_port_t *mach_port);

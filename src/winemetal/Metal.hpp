@@ -1123,6 +1123,11 @@ RemoteLayerContextId(Object view) {
   return ::WMTRemoteLayerContextId(view.handle);
 }
 
+inline void
+SetRemoteLayerFrame(MetalLayer layer, uint32_t width, uint32_t height) {
+  ::WMTSetRemoteLayerFrame(layer.handle, width, height);
+}
+
 inline Object
 HostRemoteLayer(intptr_t hwnd, uint32_t context_id) {
   return {::WMTHostRemoteLayer(hwnd, context_id)};

@@ -511,6 +511,12 @@ public:
     }
 
     ApplyLayerProps();
+    if (remote_context_id_) {
+      // Fill the other process's window, as a swapchain does on Windows.
+      RECT client = {};
+      GetClientRect(hWnd, &client);
+      WMT::SetRemoteLayerFrame(layer_weak_, client.right - client.left, client.bottom - client.top);
+    }
 
     backbuffer_desc_.Format = desc_.Format;
 
