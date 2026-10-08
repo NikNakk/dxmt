@@ -4,6 +4,7 @@
 #include "winemetal.h"
 #include <mutex>
 #include <utility>
+#include "../d3d11/d3d11_remote_layer.hpp"
 
 namespace dxmt {
 Logger Logger::s_instance("dxgi.log");
@@ -69,6 +70,8 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason,
 
   InitializeMetalCachePath();
   std::call_once(nvext_init, InitializeVendorExtensionNV);
+  // A Chromium browser process loads dxgi.dll but not d3d11.dll.
+  dxmt::StartRemoteLayerHost();
 
   return TRUE;
 }

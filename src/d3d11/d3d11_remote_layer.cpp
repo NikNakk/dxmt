@@ -7,7 +7,8 @@
  * named after the window's process. A thread in that process, started when
  * d3d11.dll loads there, then shows the context in the window through a
  * CALayerHost, and removes it when the property goes. Nothing is done per
- * frame.
+ * frame. Both d3d11.dll and dxgi.dll start the thread (a Chromium browser
+ * process loads only dxgi.dll); the first to load wins.
  */
 #include "d3d11_remote_layer.hpp"
 #include "Metal.hpp"
@@ -140,6 +141,11 @@ StartRemoteLayerHost() {
   HANDLE event = CreateEventW(nullptr, FALSE, FALSE, name);
   if (!event)
     return;
+  if (GetLastError() == ERROR_ALREADY_EXISTS) { // the other DLL started it
+    CloseHandle(event);
+    return;
+  }
+  SetEvent(event); // show anything published before this process loaded DXMT
   HANDLE thread = CreateThread(nullptr, 0, HostThread, event, 0, nullptr);
   if (thread)
     CloseHandle(thread);
