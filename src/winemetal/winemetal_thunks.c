@@ -1086,6 +1086,14 @@ WMTRemoteLayerContextId(obj_handle_t view) {
   return (uint32_t)params.ret;
 }
 
+WINEMETAL_API void
+WMTSetRemoteLayerFrame(obj_handle_t layer, uint32_t width, uint32_t height) {
+  struct unixcall_generic_obj_uint64_noret params = {0};
+  params.handle = layer;
+  params.arg = ((uint64_t)width << 32) | height;
+  UNIX_CALL(154, &params);
+}
+
 WINEMETAL_API obj_handle_t
 WMTHostRemoteLayer(intptr_t hwnd, uint32_t context_id) {
   struct unixcall_generic_obj_uint64_obj_ret params = {0};

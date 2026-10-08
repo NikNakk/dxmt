@@ -1621,8 +1621,6 @@ _MTLDevice_supportsFXTemporalScaler(void *obj) {
   return STATUS_SUCCESS;
 }
 
-static void dxmt_remote_layer_fit(CAMetalLayer *layer);
-
 static NTSTATUS
 _MetalLayer_setProps(void *obj) {
   struct unixcall_generic_obj_constptr_noret *params = obj;
@@ -1636,7 +1634,6 @@ _MetalLayer_setProps(void *obj) {
     layer.displaySyncEnabled = props->display_sync_enabled;
     layer.drawableSize = CGSizeMake(props->drawable_width, props->drawable_height);
     layer.pixelFormat = to_metal_pixel_format(props->pixel_format);
-    dxmt_remote_layer_fit(layer);
   });
   return STATUS_SUCCESS;
 }
@@ -1720,8 +1717,6 @@ typedef uint32_t DXMTCAContextID;
 @property DXMTCAContextID contextId;
 @end
 
-static const char dxmt_remote_layer_key = 0;
-
 static bool
 dxmt_remote_layer_supported(void) {
   Class context_class = NSClassFromString(@"CAContext");
@@ -1732,16 +1727,6 @@ dxmt_remote_layer_supported(void) {
          dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
 }
 
-/* Sizes a remote layer from its drawable; nothing else lays it out. */
-static void
-dxmt_remote_layer_fit(CAMetalLayer *layer) {
-  if (!objc_getAssociatedObject(layer, &dxmt_remote_layer_key)) return;
-  CGFloat scale = layer.contentsScale > 0 ? layer.contentsScale : 1;
-  [CATransaction begin];
-  [CATransaction setDisableActions:YES];
-  layer.frame = CGRectMake(0, 0, layer.drawableSize.width / scale, layer.drawableSize.height / scale);
-  [CATransaction commit];
-}
 
 static void
 create_wine_window_metal_view(struct unixcall_create_metal_view_from_hwnd *params) {
@@ -1803,7 +1788,6 @@ _CreateMetalViewFromHWND(void *obj) {
           CAMetalLayer *layer = [CAMetalLayer layer];
           layer.device = (id<MTLDevice>)params->device;
           layer.anchorPoint = CGPointZero;
-          objc_setAssociatedObject(layer, &dxmt_remote_layer_key, @YES, OBJC_ASSOCIATION_RETAIN);
           uint32_t (*main_connection)(void) = dlsym(RTLD_DEFAULT, "CGSMainConnectionID");
           CAContext *context =
               [[NSClassFromString(@"CAContext") contextWithCGSConnection:main_connection() options:@{}] retain];
@@ -1845,6 +1829,22 @@ _WMTRemoteLayerContextId(void *obj) {
   Class context_class = NSClassFromString(@"CAContext");
   id view = (id)params->handle;
   params->ret = context_class && [view isKindOfClass:context_class] ? ((CAContext *)view).contextId : 0;
+  return STATUS_SUCCESS;
+}
+
+/* A remote layer's size in the host window (its client area, in points); the
+ * drawable is scaled to fill it. Nothing else lays out a context's root layer. */
+static NTSTATUS
+_WMTSetRemoteLayerFrame(void *obj) {
+  struct unixcall_generic_obj_uint64_noret *params = obj;
+  CAMetalLayer *layer = (CAMetalLayer *)params->handle;
+  CGFloat width = (uint32_t)(params->arg >> 32), height = (uint32_t)params->arg;
+  execute_on_main(^{
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    layer.frame = CGRectMake(0, 0, width, height);
+    [CATransaction commit];
+  });
   return STATUS_SUCCESS;
 }
 
@@ -3706,6 +3706,7 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLTexture_createSharedMachPort,
     &_WMTRemoteLayerContextId,
     &_WMTHostRemoteLayer,
+    &_WMTSetRemoteLayerFrame,
 };
 
 #ifndef DXMT_NATIVE
@@ -3864,5 +3865,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLTexture_createSharedMachPort,
     &_WMTRemoteLayerContextId,
     &_WMTHostRemoteLayer,
+    &_WMTSetRemoteLayerFrame,
 };
 #endif
