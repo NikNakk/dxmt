@@ -107,7 +107,10 @@ for that acceptance test.
 Upstream Wine 11.19 built and installed in a separate experimental directory;
 its loader reported `wine-11.19`. The available MSync devel patch failed a dry run
 against that source. No MSync-enabled modern engine, optional Wine presentation
-interface, or GUI/XR validation of that engine is claimed. The primary Wine
+interface, or GUI/XR validation of that engine was claimed at initial delivery.
+The subsequent [Wine 11.19 preparation](wine-11.19-comparison.md) records corrected
+dependencies, boot/crypto/synchronization tests, DXMT fixtures and actual
+compositor samples; hardware XR and Steam acceptance remain untested. The primary Wine
 snapshot has no Git metadata and was not modified. The independently applicable
 interface/implementation plan and build recipe are documented in
 [architecture](cross-process-metal-presentation.md) and

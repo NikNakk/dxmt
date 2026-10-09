@@ -89,12 +89,13 @@ make install
 
 Configuration, the full upstream build, and installation into the separate
 runtime-11.19 prefix completed. The installed loader returned `wine-11.19` from
-`--version`. No GUI, Steam, OpenXR or synchronization runtime suite was run on this
-baseline. See the validation report for the exact scope.
-The configured baseline lacks GnuTLS and Vulkan/MoltenVK development detection;
-it is not suitable for Steam login/OpenXR deployment as configured. Do not replace
-the primary engine with it. Add explicit x86_64 dependency flags and enable tests
-in a subsequent validation build before evaluating Steam, XR or performance.
+`--version`. At that initial stage, no GUI, Steam, OpenXR or synchronization runtime suite
+had been run on this baseline. See the validation report for the exact scope.
+The initial configured baseline lacked GnuTLS and Vulkan/MoltenVK development detection;
+it was not suitable for Steam login/OpenXR deployment as configured. The subsequent
+[Wine 11.19 comparison preparation](wine-11.19-comparison.md) documents the dependency
+corrections, SDK pipe2 workaround, matching bridge build and runtime checks.
+Do not replace the primary engine merely because a baseline build succeeds.
 Do not install a partially built engine over CrossOver.
 
 ## MSync port acceptance plan
