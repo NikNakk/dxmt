@@ -1,12 +1,18 @@
 #!/bin/sh
-# Rebuild the separate, unpatched upstream baseline; never install over CrossOver.
+# Rebuild a separate upstream baseline or optional provider; never replace CrossOver.
 set -eu
 workspace=${WINE_WORKSPACE:-/Users/nickkennedy/Code/wine-crossover}
 experimental="$workspace/experimental"
-source_tree="$experimental/wine-wine-11.19"
-build_tree="$experimental/build-11.19"
-runtime="$experimental/runtime-11.19"
+case "${WINE_EXPERIMENTAL_VARIANT:-}" in
+  '') variant='' ;;
+  metal) variant='-metal' ;;
+  *) echo 'Supported variants: empty (unpatched) or metal (optional provider)' >&2; exit 1 ;;
+esac
+source_tree="$experimental/wine-wine-11.19$variant"
+build_tree="$experimental/build-11.19$variant"
+runtime="$experimental/runtime-11.19$variant"
 dependencies="$experimental/deps-x86_64/lib"
+[ -z "$variant" ] || test -f "$source_tree/dlls/winemac.drv/wine_metal_presentation.h"
 test "$(cat "$source_tree/VERSION")" = 'Wine version 11.19'
 mkdir -p "$build_tree" "$experimental/logs"
 python3 - "$workspace/deps-x86_64/lib" "$dependencies" <<'PY'
@@ -41,7 +47,7 @@ cd "$build_tree"
   --without-gphoto --without-capi --without-netapi --without-opencl --without-ffmpeg \
   GNUTLS_CFLAGS=-I/opt/homebrew/include GNUTLS_LIBS="-L$dependencies -lgnutls" \
   FREETYPE_CFLAGS=-I/opt/homebrew/include/freetype2 FREETYPE_LIBS="-L$dependencies -lfreetype" \
-  LDFLAGS="-L$dependencies -Wl,-rpath,$dependencies" > "$experimental/logs/configure.log" 2>&1
-make -j"${WINE_BUILD_JOBS:-8}" > "$experimental/logs/build.log" 2>&1
-make install > "$experimental/logs/install.log" 2>&1
+  LDFLAGS="-L$dependencies -Wl,-rpath,$dependencies" > "$experimental/logs/configure$variant.log" 2>&1
+make -j"${WINE_BUILD_JOBS:-8}" > "$experimental/logs/build$variant.log" 2>&1
+make install > "$experimental/logs/install$variant.log" 2>&1
 "$runtime/bin/wine" --version

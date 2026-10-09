@@ -76,7 +76,7 @@ static DWORD WINAPI render(void *param) {
     args.color = 2;
   }
   HMODULE dll = LoadLibraryW(L"d3d11.dll");
-  auto create_device = dll ? reinterpret_cast<decltype(&D3D11CreateDevice)>(GetProcAddress(dll, "D3D11CreateDevice")) : nullptr;
+  auto create_device = dll ? reinterpret_cast<decltype(&D3D11CreateDevice)>(reinterpret_cast<void *>(GetProcAddress(dll, "D3D11CreateDevice"))) : nullptr;
   if (!create_device) { ++failures; return 1; }
   ID3D11Device *device = nullptr;
   ID3D11DeviceContext *context = nullptr;
@@ -150,26 +150,38 @@ int wmain(int argc, wchar_t **argv) {
     return render(&args);
   }
   const wchar_t *mode = argc > 1 ? argv[1] : L"siblings";
-  bool same = !wcscmp(mode, L"same"), root_mode = !wcscmp(mode, L"root");
+  bool same_siblings_back = !wcscmp(mode, L"same-siblings-back");
+  bool same_siblings_front = !wcscmp(mode, L"same-siblings-front");
+  bool same_siblings = !wcscmp(mode, L"same-siblings") || same_siblings_back || same_siblings_front;
+  bool same_child = !wcscmp(mode, L"same-child") || same_siblings;
+  bool same = !wcscmp(mode, L"same") || same_child, root_mode = !wcscmp(mode, L"root");
   bool terminate = !wcscmp(mode, L"terminate");
   bool owned_child = !wcscmp(mode, L"owned-child");
-  bool static_control = !wcscmp(mode, L"siblings-static");
+  bool static_control = !wcscmp(mode, L"siblings-static") || same_siblings_back || same_siblings_front;
   WNDCLASSW klass = {};
   klass.lpfnWndProc = procedure; klass.hInstance = GetModuleHandleW(nullptr);
   klass.lpszClassName = L"DXMTRemoteRegression";
   klass.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
   RegisterClassW(&klass);
-  HWND root = CreateWindowW(klass.lpszClassName, L"DXMT remote regression: green/red/blue content",
+  const wchar_t *title = _wgetenv(L"DXMT_TEST_TITLE");
+  HWND root = CreateWindowW(klass.lpszClassName, title ? title : L"DXMT remote regression: green/red/blue content",
                             WS_OVERLAPPEDWINDOW | WS_VISIBLE, 100, 100, 1000, 700, nullptr, nullptr, klass.hInstance, nullptr);
   if (!root) return 1;
   // The host process loads DXGI only. It never imports D3D11 unless mode=same.
   IDXGIFactory *factory = nullptr;
   check(CreateDXGIFactory(__uuidof(IDXGIFactory), (void **)&factory), "host CreateDXGIFactory");
   if (factory) factory->Release();
-  HWND back = root_mode || same || owned_child ? root : CreateWindowW(klass.lpszClassName, L"back", WS_CHILD | WS_VISIBLE,
+  HWND back = root_mode || (same && !same_child) || owned_child ? root : CreateWindowW(klass.lpszClassName, L"back", WS_CHILD | WS_VISIBLE,
                              0, 0, 900, 600, root, nullptr, klass.hInstance, nullptr);
-  HWND front = (!wcscmp(mode, L"siblings") || static_control) ? CreateWindowW(klass.lpszClassName, L"front", WS_CHILD | WS_VISIBLE,
+  HWND front = (!wcscmp(mode, L"siblings") || static_control || same_siblings) ? CreateWindowW(klass.lpszClassName, L"front", WS_CHILD | WS_VISIBLE,
                              150, 100, 500, 350, root, nullptr, klass.hInstance, nullptr) : nullptr;
+  if (same_siblings_back || same_siblings_front) {
+    SetWindowPos(front, same_siblings_back ? HWND_BOTTOM : HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    bool front_above = GetWindow(back, GW_HWNDPREV) == front;
+    std::printf("static sibling order: front_above=%d expected=%d\n", front_above, same_siblings_front);
+    if (front_above != same_siblings_front) ++failures;
+  }
   RenderArgs args = {back, owned_child ? 3u : 0u, 12000, !static_control, front};
   std::vector<HANDLE> processes;
   if (same) processes.push_back(CreateThread(nullptr, 0, render, &args, 0, nullptr));

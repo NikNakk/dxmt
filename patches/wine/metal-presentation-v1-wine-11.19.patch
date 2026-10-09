@@ -1,0 +1,289 @@
+--- a/dlls/winemac.drv/window.c
++++ b/dlls/winemac.drv/window.c
+@@ -1124,6 +1124,8 @@
+     release_win_data(data);
+ }
+ 
++static const struct client_surface_funcs metal_presentation_funcs;
++
+ static const struct client_surface_funcs macdrv_client_surface_funcs =
+ {
+     .size = sizeof(struct macdrv_client_surface),
+@@ -1135,7 +1137,7 @@
+ 
+ struct macdrv_client_surface *impl_from_client_surface(struct client_surface *client)
+ {
+-    assert(client->funcs == &macdrv_client_surface_funcs);
++    assert(client->funcs == &macdrv_client_surface_funcs || client->funcs == &metal_presentation_funcs);
+     return CONTAINING_RECORD(client, struct macdrv_client_surface, client);
+ }
+ 
+@@ -1184,6 +1186,132 @@
+ 
+     return surface->metal_swapchain != NULL;
+ }
++
++/* Experimental generic native interface; no cross-process capability is
++ * advertised on Wine 11.19. SPDX-License-Identifier: LGPL-2.1-or-later */
++#include "wine_metal_presentation.h"
++struct metal_presentation_surface
++{
++    struct macdrv_client_surface surface;
++    LONG submitted;
++};
++static void metal_presentation_update(struct client_surface *client)
++{
++    struct metal_presentation_surface *surface = (struct metal_presentation_surface *)client;
++    HWND sibling;
++    uintptr_t *above = NULL, *grown;
++    unsigned int count = 0, capacity = 0;
++    macdrv_client_surface_update(client);
++    if (client->hwnd != client->toplevel)
++    {
++        for (sibling = NtUserGetWindowRelative(client->hwnd, GW_HWNDPREV); sibling;
++             sibling = NtUserGetWindowRelative(sibling, GW_HWNDPREV))
++        {
++            unsigned int i;
++            /* A concurrently changing HWND chain must not loop forever. */
++            if (sibling == client->hwnd) break;
++            for (i = 0; i < count && above[i] != (uintptr_t)sibling; ++i) {}
++            if (i < count) break;
++            if (count == capacity)
++            {
++                capacity = capacity ? capacity * 2 : 8;
++                if (!(grown = realloc(above, capacity * sizeof(*above)))) break;
++                above = grown;
++            }
++            above[count++] = (uintptr_t)sibling;
++        }
++        macdrv_metal_presentation_order_view(surface->surface.cocoa_view, (uintptr_t)client->hwnd, above, count);
++        free(above);
++    }
++    /* Window changes can replace data->client_view. Reassert the submitted
++     * surface on window notifications, without a per-frame renderer call. */
++    if (InterlockedCompareExchange(&surface->submitted, 0, 0))
++        macdrv_client_surface_present(client, 0);
++}
++static const struct client_surface_funcs metal_presentation_funcs =
++{
++    .size = sizeof(struct metal_presentation_surface),
++    .destroy = macdrv_client_surface_destroy,
++    .detach = macdrv_client_surface_detach,
++    .update = metal_presentation_update,
++    .present = macdrv_client_surface_present,
++};
++static int metal_presentation_create(uintptr_t handle, void *device, void **token, void **layer)
++{
++    HWND hwnd = (HWND)handle, root = NtUserGetAncestor(hwnd, GA_ROOT);
++    struct macdrv_win_data *data;
++    struct macdrv_client_surface *surface;
++    *token = *layer = NULL;
++    if (!root || !(data = get_win_data(root))) return WINE_METAL_PRESENTATION_UNSUPPORTED;
++    if (!data->cocoa_window)
++    {
++        release_win_data(data);
++        return WINE_METAL_PRESENTATION_UNSUPPORTED;
++    }
++    release_win_data(data);
++    if (!(data = get_win_data(hwnd))) return WINE_METAL_PRESENTATION_UNSUPPORTED;
++    release_win_data(data);
++    /* Register Wine geometry notifications, but do not present an empty layer. */
++    if (!(surface = client_surface_create(&metal_presentation_funcs, hwnd, 0, FALSE)))
++        return WINE_METAL_PRESENTATION_FAILED;
++    surface->cocoa_view = macdrv_create_view(cgrect_from_rect(surface->client.monitor_rect));
++    macdrv_set_view_hidden(surface->cocoa_view, TRUE);
++    if (!macdrv_client_surface_acquire_metal_swapchain(surface))
++    {
++        client_surface_release(&surface->client);
++        return WINE_METAL_PRESENTATION_FAILED;
++    }
++    *layer = macdrv_swapchain_get_layer(surface->metal_swapchain);
++    macdrv_metal_presentation_set_device(*layer, device);
++    client_surface_register(&surface->client);
++    if (!(data = get_win_data(hwnd)))
++    {
++        client_surface_release(&surface->client);
++        *layer = NULL;
++        return WINE_METAL_PRESENTATION_FAILED;
++    }
++    if (surface->client.hwnd != hwnd)
++    {
++        release_win_data(data);
++        client_surface_release(&surface->client);
++        *layer = NULL;
++        return WINE_METAL_PRESENTATION_FAILED;
++    }
++    ++data->metal_presentation_users;
++    release_win_data(data);
++    *token = surface;
++    return 0;
++}
++static void metal_presentation_submitted(void *token)
++{
++    struct macdrv_client_surface *surface = token;
++    InterlockedExchange(&((struct metal_presentation_surface *)surface)->submitted, 1);
++    client_surface_present(&surface->client);
++}
++static void metal_presentation_release(void *token)
++{
++    struct macdrv_client_surface *surface = token;
++    struct macdrv_win_data *data;
++    /* Registered surfaces are detached on window destruction; a detached
++     * token must never decrement the ownership of a reused HWND. */
++    if (surface->client.hwnd && (data = get_win_data(surface->client.hwnd)))
++    {
++        if (surface->client.hwnd == data->hwnd && data->metal_presentation_users)
++            --data->metal_presentation_users;
++        release_win_data(data);
++    }
++    client_surface_release(&surface->client);
++}
++__attribute__((visibility("default")))
++const struct wine_metal_presentation_v1 *macdrv_metal_presentation_query_v1(uint32_t version)
++{
++    static const struct wine_metal_presentation_v1 api = {
++        sizeof(api), WINE_METAL_PRESENTATION_VERSION, WINE_METAL_PRESENTATION_LOCAL, 0,
++        metal_presentation_create, metal_presentation_submitted, metal_presentation_release
++    };
++    return version == WINE_METAL_PRESENTATION_VERSION ? &api : NULL;
++}
++
+ 
+ /**********************************************************************
+  *              SetDesktopWindow   (MACDRV.@)
+--- a/dlls/winemac.drv/cocoa_window.m
++++ b/dlls/winemac.drv/cocoa_window.m
+@@ -29,6 +29,7 @@
+ #import "cocoa_window.h"
+ 
+ #import "cocoa_app.h"
++#import <objc/runtime.h>
+ #import "cocoa_event.h"
+ #import "cocoa_opengl.h"
+ 
+@@ -3948,3 +3949,40 @@
+             [[window contentView] clearMarkedText];
+     });
+ }
++
++/* Use the renderer's chosen GPU rather than Wine's default GPU. */
++void macdrv_metal_presentation_set_device(void *layer, void *device)
++{
++    OnMainThread(^{ ((CAMetalLayer *)layer).device = (id<MTLDevice>)device; });
++}
++
++/* Wine's generic client-surface update otherwise appends every child on top.
++ * Keep Win32 order among participating sibling surfaces, without Win32 calls
++ * or window-data locks on the Cocoa thread. Async blocks retain their views. */
++void macdrv_metal_presentation_order_view(void *object, uintptr_t hwnd, const uintptr_t *above, unsigned int count)
++{
++    static char association_key;
++    WineContentView *view = object;
++    NSMutableArray *siblings = [[NSMutableArray alloc] initWithCapacity:count];
++    for (unsigned int i = 0; i < count; ++i) [siblings addObject:@(above[i])];
++    OnMainThreadAsync(^{
++        objc_setAssociatedObject(view, &association_key, @(hwnd), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
++        NSView *parent = [view superview], *anchor = nil;
++        if (!parent) return;
++        for (NSNumber *sibling in siblings)
++        {
++            for (NSView *candidate in [parent subviews])
++            {
++                if (candidate != view && ![candidate isHidden] &&
++                    [objc_getAssociatedObject(candidate, &association_key) isEqual:sibling])
++                {
++                    anchor = candidate;
++                    break;
++                }
++            }
++            if (anchor) break;
++        }
++        [parent addSubview:view positioned:anchor ? NSWindowBelow : NSWindowAbove relativeTo:anchor];
++    });
++    [siblings release];
++}
+--- a/dlls/winemac.drv/macdrv.h
++++ b/dlls/winemac.drv/macdrv.h
+@@ -232,6 +232,7 @@
+     HWND                hwnd;                   /* hwnd that this private data belongs to */
+     WineWindow         *cocoa_window;
+     WineContentView    *client_view;
++    unsigned int       metal_presentation_users; /* optional native interface */
+     struct window_rects rects;                  /* window rects in monitor DPI, relative to parent client area */
+     int                 pixel_format;           /* pixel format for GL */
+     HANDLE              drag_event;             /* event to signal that Cocoa-driven window dragging has ended */
+@@ -394,3 +395,7 @@
+ 
+ #undef BOOL
+ #endif  /* __WINE_MACDRV_H */
++
++extern void macdrv_metal_presentation_set_device(void *layer, void *device);
++
++extern void macdrv_metal_presentation_order_view(void *view, uintptr_t hwnd, const uintptr_t *above, unsigned int count);
+--- a/dlls/winemac.drv/surface.c
++++ b/dlls/winemac.drv/surface.c
+@@ -124,7 +124,7 @@
+      * content in the window_surface */
+     if ((data = get_win_data(window_surface->hwnd)))
+     {
+-        if (data->client_view)
++        if (data->client_view && !data->metal_presentation_users)
+         {
+             macdrv_set_view_hidden(data->client_view, TRUE);
+             data->client_view = NULL;
+--- /dev/null
++++ b/dlls/winemac.drv/wine_metal_presentation.h
+@@ -0,0 +1,27 @@
++/* Optional native Unix interface, independent of macdrv_functions_t.
++ * SPDX-License-Identifier: MIT
++ * All pointers belong to the current Unix process, never to PE callers. */
++#ifndef WINE_METAL_PRESENTATION_H
++#define WINE_METAL_PRESENTATION_H
++#include <stdint.h>
++#define WINE_METAL_PRESENTATION_VERSION 1
++#define WINE_METAL_PRESENTATION_LOCAL 1u
++#define WINE_METAL_PRESENTATION_UNSUPPORTED 1
++#define WINE_METAL_PRESENTATION_FAILED 2
++struct wine_metal_presentation_v1 {
++    uint32_t size, version, capabilities, reserved;
++    /* On failure no resources or window attachment remain. Layer is borrowed
++     * until release. Device is supplied by the renderer, retained by layer. */
++    int (*create)(uintptr_t hwnd, void *device, void **token, void **layer);
++    /* Called once, after first real submission, not on DXGI_PRESENT_TEST. */
++    void (*submitted)(void *token);
++    /* Caller drains GPU use before release; provider owns view and surface. */
++    void (*release)(void *token);
++};
++static inline int wine_metal_presentation_valid(const struct wine_metal_presentation_v1 *api)
++{
++    return api && api->size >= sizeof(*api) && api->version == WINE_METAL_PRESENTATION_VERSION &&
++           (api->capabilities & WINE_METAL_PRESENTATION_LOCAL) && api->create && api->submitted && api->release;
++}
++typedef const struct wine_metal_presentation_v1 *(*wine_metal_presentation_query_fn)(uint32_t version);
++#endif
+--- a/dlls/win32u/window.c
++++ b/dlls/win32u/window.c
+@@ -502,6 +502,13 @@
+     }
+ 
+     pthread_mutex_unlock( &surfaces_lock );
++}
++
++/* Native renderers outside the Vulkan/OpenGL wrappers need the same window
++ * notification registration. The caller owns its reference until release. */
++void client_surface_register( struct client_surface *surface )
++{
++    use_window_client_surface( surface, TRUE );
+ }
+ 
+ struct client_surface *get_unused_client_surface( HWND hwnd, int format, BOOL raw )
+--- a/include/wine/gdi_driver.h
++++ b/include/wine/gdi_driver.h
+@@ -280,6 +280,7 @@
+ W32KAPI void *client_surface_create( const struct client_surface_funcs *funcs, HWND hwnd, int format, BOOL raw );
+ W32KAPI void client_surface_add_ref( struct client_surface *surface );
+ W32KAPI void client_surface_release( struct client_surface *surface );
++W32KAPI void client_surface_register( struct client_surface *surface );
+ W32KAPI void client_surface_present( struct client_surface *surface );
+ W32KAPI void update_client_surfaces( HWND hwnd );
+ W32KAPI void detach_client_surfaces( HWND hwnd );
