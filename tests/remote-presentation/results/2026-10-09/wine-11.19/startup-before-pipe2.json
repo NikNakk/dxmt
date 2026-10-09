@@ -1,0 +1,10 @@
+[
+  {
+    "test": "wineboot",
+    "exit": -11
+  },
+  {
+    "test": "engine-smoke",
+    "exit": -11
+  }
+]

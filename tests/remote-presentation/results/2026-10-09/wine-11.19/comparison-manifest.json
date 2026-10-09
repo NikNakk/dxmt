@@ -1,0 +1,16 @@
+{
+  "wine": "11.19",
+  "msync": false,
+  "dxmt_commit": "6ae662d2866fba4b7c28ccab9524654a0e87cbec",
+  "sha256": {
+    "runtime-11.19/bin/wine": "dcb43a8abadde16b6ce4b05f48f775b1d02c4ab892a419d562c419a6f9314d28",
+    "runtime-11.19/bin/wineserver": "0bb3cdffb65a3a197bdd703b83004e2cd273eb3060c2123695f411673765a0b6",
+    "runtime-11.19/lib/wine/x86_64-unix/ntdll.so": "711b655e27d1f54d1db929993fcb72c1608d2fb311da766d1b7a6e75f4e7542b",
+    "runtime-11.19-dxmt/lib/wine/x86_64-windows/d3d11.dll": "5e86102fc9271f9dfb749f03fe54a24b7f1303b9212afbd9c6752c2099a36a01",
+    "runtime-11.19-dxmt/lib/wine/x86_64-windows/dxgi.dll": "a138aba2f8f8c03e64a0eae99bc387995537e3f12ddffaff19af8fcaf4cea01f",
+    "runtime-11.19-dxmt/lib/wine/x86_64-windows/winemetal.dll": "803481f698b9953e7de592220d51fe652f311b088367ec40b57597676c8a6f5a",
+    "runtime-11.19-dxmt/lib/wine/x86_64-unix/winemetal.so": "390e3ed3191db0a7b4a0580740ec578ce88cf2244b50aa3291b99ae9742d7d84",
+    "runtime-11.19-dxmt/lib/wine/x86_64-windows/wineopenxr.dll": "9d4f20cadf846f9b2bf91b0217b1b66ab2a9356b044ab8376167789b8da18a47",
+    "runtime-11.19-dxmt/lib/wine/x86_64-unix/wineopenxr.so": "e19f0d4f22057b5e2cbb18a971957d06bb710b0f6b69eda7e5c042178a70bd37"
+  }
+}

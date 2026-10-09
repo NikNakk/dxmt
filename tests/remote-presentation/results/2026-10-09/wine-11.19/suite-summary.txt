@@ -1,0 +1,19 @@
+engine-smoke.log: AES known-answer: PASS (NTSTATUS=00000000)
+engine-smoke.log: Steam HTTPS HEAD: PASS (HTTP=200 error=0)
+engine-smoke.log: Vulkan: PASS (result=0 devices=1)
+dxmt-smoke.log: AES known-answer: PASS (NTSTATUS=00000000)
+dxmt-smoke.log: Steam HTTPS HEAD: PASS (HTTP=200 error=0)
+dxmt-smoke.log: Vulkan: PASS (result=0 devices=1)
+dxmt-smoke.log: OpenXR bridge module: PASS (error=0; no XR instance/session created)
+ntdll-sync.log: sync.c:866: Test marked todo: got 0
+ntdll-sync.log: 0188:sync: 0 tests executed (0 marked as todo, 0 as flaky, 0 failures), 0 skipped.
+ntdll-sync.log: 0020:sync: 433 tests executed (1 marked as todo, 0 as flaky, 0 failures), 0 skipped.
+bcrypt.log: bcrypt.c:98: Test marked todo: Neither XP or Vista key is present
+bcrypt.log: bcrypt.c:836: Test marked todo: got 0xc0000002
+bcrypt.log: bcrypt.c:1440: Test marked todo: got 0xc000000d
+bcrypt.log: bcrypt.c:1624: Test marked todo: got 0xc0000206
+bcrypt.log: bcrypt.c:4100: Test marked todo: got 0xc0000002
+bcrypt.log: bcrypt.c:4494: Test marked todo: got 0
+bcrypt.log: bcrypt.c:4497: Test marked todo: got 0
+bcrypt.log: bcrypt.c:2929: Test marked todo: unexpected OAEP(NULL) encrypt status 0
+bcrypt.log: 0270:bcrypt: 23507 tests executed (8 marked as todo, 0 as flaky, 0 failures), 0 skipped.

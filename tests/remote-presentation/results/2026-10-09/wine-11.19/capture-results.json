@@ -1,0 +1,30 @@
+[
+  {
+    "trial": "first-churn",
+    "wine": 0,
+    "capture": 1,
+    "reason": "SCStreamErrorDomain -3811"
+  },
+  {
+    "trial": "static",
+    "wine": 0,
+    "capture": 1
+  },
+  {
+    "trial": "churn-2",
+    "wine": 0,
+    "capture": 1
+  },
+  {
+    "trial": "awake-static",
+    "wine": 0,
+    "capture": 0,
+    "temporary_display_assertion": true
+  },
+  {
+    "trial": "awake-churn",
+    "wine": 0,
+    "capture": 0,
+    "temporary_display_assertion": true
+  }
+]

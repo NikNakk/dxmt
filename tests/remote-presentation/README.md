@@ -153,3 +153,9 @@ SteamVR CEF UI, the SteamVR compositor, the Wine/OpenXR bridge, and Monado in th
 existing setup. Test an additional OpenXR runtime when available. No XR test is
 claimed by the harness. Revert to the primary installation if any regression
 appears; it is not modified by staging.
+
+## Separate upstream engine
+
+See [Wine 11.19 comparison preparation](../../docs/wine-11.19-comparison.md) for
+the isolated build, launchers, crypto/HTTPS/Vulkan smoke executable and matching
+OpenXR bridge. This does not change the production CrossOver runtime.

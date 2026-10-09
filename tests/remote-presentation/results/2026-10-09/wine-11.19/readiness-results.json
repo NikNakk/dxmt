@@ -1,0 +1,62 @@
+[
+  {
+    "test": "wineboot",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/wineboot.log"
+  },
+  {
+    "test": "engine-smoke",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/engine-smoke.log"
+  },
+  {
+    "test": "ntdll-sync",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/ntdll-sync.log"
+  },
+  {
+    "test": "bcrypt",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/bcrypt.log"
+  },
+  {
+    "test": "dxmt-smoke",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/dxmt-smoke.log"
+  },
+  {
+    "test": "presentation-same",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/presentation-same.log"
+  },
+  {
+    "test": "presentation-root",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/presentation-root.log"
+  },
+  {
+    "test": "presentation-owned-child",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/presentation-owned-child.log"
+  },
+  {
+    "test": "presentation-siblings",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/presentation-siblings.log"
+  },
+  {
+    "test": "presentation-terminate",
+    "exit": 0,
+    "timed_out": false,
+    "log": "/Users/nickkennedy/Code/wine-crossover/experimental/logs/presentation-terminate.log"
+  }
+]
