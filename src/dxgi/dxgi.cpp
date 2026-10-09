@@ -71,7 +71,7 @@ extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason,
   InitializeMetalCachePath();
   std::call_once(nvext_init, InitializeVendorExtensionNV);
   // A Chromium browser process loads dxgi.dll but not d3d11.dll.
-  dxmt::StartRemoteLayerHost();
+  dxmt::QueueRemoteLayerHost();
 
   return TRUE;
 }

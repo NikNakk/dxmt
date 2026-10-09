@@ -122,7 +122,7 @@ public:
   MTLD3D11SwapChain(
       IDXGIFactory1 *pFactory, MTLD3D11Device *pDevice, IMTLDXGIDevice *pDXGIDevice,
        HWND hWnd, const DXGI_SWAP_CHAIN_DESC1 *pDesc,
-      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pFullscreenDesc
+      const DXGI_SWAP_CHAIN_FULLSCREEN_DESC *pFullscreenDesc, WMT::Object native_view, WMT::MetalLayer layer
   ) :
       MTLDXGISubObject(pDevice),
       factory_(pFactory),
@@ -134,17 +134,9 @@ public:
       monitor_(wsi::getWindowMonitor(hWnd)),
       hud(WMT::DeveloperHUDProperties::instance()) {
 
-    native_view_ = WMT::CreateMetalViewFromHWND((intptr_t)hWnd, pDevice->GetMTLDevice(), layer_weak_);
-
-    if (!native_view_) {
-      ERR("Failed to create metal view, it seems like your Wine has no exported symbols needed by DXMT.");
-      abort();
-    }
-
-    // Another process's window: that process shows this swapchain's layer.
+    native_view_ = native_view;
+    layer_weak_ = layer;
     remote_context_id_ = WMT::RemoteLayerContextId(native_view_);
-    if (remote_context_id_)
-      PublishRemoteLayer(hWnd, remote_context_id_);
 
     if constexpr (EnableMetalFX) {
       scale_factor = std::max(Config::getInstance().getOption<float>("d3d11.metalSpatialUpscaleFactor", 2), 1.0f);
@@ -157,6 +149,10 @@ public:
     frame_latency = kSwapchainLatency;
     present_semaphore_ = CreateSemaphore(nullptr, frame_latency,
                                          DXGI_MAX_SWAP_CHAIN_BUFFERS, nullptr);
+    if (!present_semaphore_) {
+      initialization_result_ = HRESULT_FROM_WIN32(GetLastError());
+      return;
+    }
 
     // without this flag, there is still a DXGIDevice level of frame latency control
     if (desc_.Flags & DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT) {
@@ -206,17 +202,19 @@ public:
     if (desc_.BufferUsage & DXGI_USAGE_UNORDERED_ACCESS)
       backbuffer_desc_.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
-    // FIXME: check HRESULT!
-    ResizeBuffers(0, desc_.Width, desc_.Height, DXGI_FORMAT_UNKNOWN, desc_.Flags);
-    if (!fullscreen_desc_.Windowed)
-      EnterFullscreenMode(nullptr);
+    initialization_result_ = ResizeBuffers(0, desc_.Width, desc_.Height, DXGI_FORMAT_UNKNOWN, desc_.Flags);
+    if (SUCCEEDED(initialization_result_) && !fullscreen_desc_.Windowed)
+      initialization_result_ = EnterFullscreenMode(nullptr);
   };
 
+  HRESULT InitializationResult() const { return initialization_result_; }
+
   ~MTLD3D11SwapChain() {
-    if (remote_context_id_)
-      WithdrawRemoteLayer(hWnd);
     device_context_->WaitUntilGPUIdle();
-    WMT::ReleaseMetalView(native_view_);
+    if (remote_context_id_ && remote_generation_)
+      RetireRemoteLayer(hWnd, remote_context_id_, remote_generation_, native_view_);
+    else
+      WMT::ReleaseMetalView(native_view_);
     native_view_ = {};
     CloseHandle(present_semaphore_);
   };
@@ -766,10 +764,6 @@ public:
     if (should_exit_fs)
       SetFullscreenState(FALSE, nullptr);
 
-    // Another process's window may be sized after its swapchain is made.
-    if (remote_context_id_ && ++remote_fit_presents_ % 30 == 0)
-      FitRemoteLayer();
-
     std::unique_lock<d3d11_device_mutex> lock(device_->mutex);
 
     device_context_->PrepareFlush();
@@ -826,6 +820,10 @@ public:
     lock.unlock(); // since PresentBoundary() will and should only stall current thread
 
     cmd_queue.PresentBoundary();
+    // Publish only after the first presentation has been submitted. Hosting
+    // acknowledges attachment, not GPU completion or first visible pixels.
+    if (remote_context_id_ && !remote_generation_)
+      remote_generation_ = PublishRemoteLayer(hWnd, remote_context_id_, remote_width_, remote_height_);
 
     return hr;
   };
@@ -1076,30 +1074,24 @@ private:
 
   Com<IDXGIFactory1> factory_;
   Com<IMTLDXGIDevice> dxgi_device_;
+  HRESULT initialization_result_ = S_OK;
   WMT::Object native_view_;
   WMT::MetalLayer layer_weak_;
   uint32_t remote_context_id_ = 0;
-  uint32_t remote_fit_presents_ = 0;
+  uint32_t remote_generation_ = 0;
   uint32_t remote_width_ = 0, remote_height_ = 0;
 
-  // Fill another process's window with this swapchain's layer, as a swapchain
-  // does on Windows: its client area, or the buffers' size while that is empty.
+  // The remote tree stays in buffer pixels. The host scales it into the
+  // actual child client area; resizing a window requires no producer IPC.
   void
   FitRemoteLayer() {
-    if (!remote_context_id_)
-      return;
-    RECT client = {};
-    GetClientRect(hWnd, &client);
-    uint32_t width = client.right - client.left, height = client.bottom - client.top;
-    if (!width || !height) {
-      width = desc_.Width;
-      height = desc_.Height;
-    }
-    if (width == remote_width_ && height == remote_height_)
-      return;
+    if (!remote_context_id_) return;
+    uint32_t width = std::max(desc_.Width, 1u), height = std::max(desc_.Height, 1u);
+    if (width == remote_width_ && height == remote_height_) return;
     remote_width_ = width;
     remote_height_ = height;
     WMT::SetRemoteLayerFrame(layer_weak_, width, height);
+    if (remote_generation_) UpdateRemoteLayerSize(hWnd, remote_context_id_, remote_generation_, width, height);
   }
   ULONG presentation_count_;
   DXGI_SWAP_CHAIN_DESC1 desc_;
@@ -1107,7 +1099,7 @@ private:
   D3D11_TEXTURE2D_DESC1 backbuffer_desc_;
   IMTLD3D11DeviceContext* device_context_;
   Com<D3D11ResourceCommon, false> backbuffer_;
-  HANDLE present_semaphore_;
+  HANDLE present_semaphore_ = nullptr;
   std::unique_ptr<CpuFence> frame_latency_fence_;
   HWND hWnd;
   HMONITOR monitor_;
@@ -1140,12 +1132,17 @@ CreateSwapChain(
     return DXGI_ERROR_INVALID_CALL;
   InitReturnPtr(ppSwapChain);
 
-  DWORD window_process_id;
+  if (!IsWindow(hWnd)) return DXGI_ERROR_INVALID_CALL;
+  DWORD window_process_id = 0;
   GetWindowThreadProcessId(hWnd, &window_process_id);
-  bool cross_process = GetProcessId(GetCurrentProcess()) != window_process_id;
+  DWORD root_process_id = 0;
+  HWND root = GetAncestor(hWnd, GA_ROOT);
+  if (!root || !GetWindowThreadProcessId(root, &root_process_id)) return DXGI_ERROR_INVALID_CALL;
+  bool remote_root = GetCurrentProcessId() != root_process_id;
+  bool cross_process = GetCurrentProcessId() != window_process_id || remote_root;
   if (cross_process && CrossProcessSwapchainEnabled()) {
     WARN("CreateSwapChain: window ", hWnd, " belongs to pid ", window_process_id,
-         "; DXMT_CROSS_PROCESS_SWAPCHAIN=", env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN"));
+         "; root ", root, " pid ", root_process_id, "; DXMT_CROSS_PROCESS_SWAPCHAIN=", env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN"));
   } else if (cross_process) {
     SYSTEMTIME now;
     GetLocalTime(&now);
@@ -1169,19 +1166,33 @@ CreateSwapChain(
       pDesc->BufferCount != 1) {
     WARN("CreateSwapChain: unsupported swap effect ", pDesc->SwapEffect, " with backbuffer size ", pDesc->BufferCount);
   }
+  WMT::MetalLayer layer;
+  WMT::Object native_view = WMT::CreateMetalViewFromHWND((intptr_t)hWnd, pDevice->GetMTLDevice(), layer, remote_root);
+  if (native_view == nullptr || layer == nullptr) {
+    if (native_view != nullptr) WMT::ReleaseMetalView(native_view);
+    ERR("CreateSwapChain: Metal presentation unavailable for window ", hWnd,
+        "; enable DXMT_REMOTE_LAYER_DEBUG=1 for platform/ownership diagnostics");
+    return DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+  }
   if (env::getEnvVar("DXMT_METALFX_SPATIAL_SWAPCHAIN") == "1") {
     if (pDevice->GetMTLDevice().supportsFXSpatialScaler()) {
-      *ppSwapChain = new MTLD3D11SwapChain<true>(
-          pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc
+      auto *swapchain = new MTLD3D11SwapChain<true>(
+          pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc, native_view, layer
       );
+      HRESULT result = swapchain->InitializationResult();
+      if (FAILED(result)) { swapchain->Release(); return result; }
+      *ppSwapChain = swapchain;
       return S_OK;
     } else {
       WARN("MetalFX spatial scaler is not supported on this device");
     }
   }
-  *ppSwapChain = new MTLD3D11SwapChain<false>(
-      pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc
+  auto *swapchain = new MTLD3D11SwapChain<false>(
+      pFactory, pDevice, layer_factory.ptr(), hWnd, pDesc, pFullscreenDesc, native_view, layer
   );
+  HRESULT result = swapchain->InitializationResult();
+  if (FAILED(result)) { swapchain->Release(); return result; }
+  *ppSwapChain = swapchain;
   return S_OK;
 };
 

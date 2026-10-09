@@ -718,7 +718,7 @@ CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer)
   params.device = device;
   params.ret_layer = NULL_OBJECT_HANDLE;
   params.ret_view = NULL_OBJECT_HANDLE;
-  UNIX_CALL(72, &params);
+  (void)WINE_UNIX_CALL(72, &params);
   *layer = params.ret_layer;
   return params.ret_view;
 }
@@ -1099,7 +1099,7 @@ WMTHostRemoteLayer(intptr_t hwnd, uint32_t context_id) {
   struct unixcall_generic_obj_uint64_obj_ret params = {0};
   params.handle = (obj_handle_t)(uint64_t)hwnd;
   params.arg = context_id;
-  UNIX_CALL(153, &params);
+  (void)WINE_UNIX_CALL(153, &params);
   return params.ret;
 }
 
@@ -1417,4 +1417,23 @@ MTLDevice_retainEventObject(obj_handle_t device, obj_handle_t event) {
   params.object = event;
   UNIX_CALL(149, &params);
   return params.ret;
+}
+
+WINEMETAL_API void
+WMTUpdateRemoteLayerHost(obj_handle_t view, const struct WMTRemotePlacement *placement) {
+  struct unixcall_update_remote_layer_host params = {0};
+  params.view = view;
+  params.placement = *placement;
+  UNIX_CALL(155, &params);
+}
+
+WINEMETAL_API obj_handle_t
+WMTCreateMetalViewWithOwnership(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer, uint32_t remote_root) {
+  struct unixcall_create_metal_view_with_ownership params = {0};
+  params.base.hwnd = (uint64_t)(uintptr_t)hwnd;
+  params.base.device = device;
+  params.remote_root = remote_root;
+  (void)WINE_UNIX_CALL(156, &params);
+  *layer = params.base.ret_layer;
+  return params.base.ret_view;
 }

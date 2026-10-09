@@ -1780,6 +1780,7 @@ WINEMETAL_API void MetalLayer_setProps(obj_handle_t layer, const struct WMTLayer
 WINEMETAL_API void MetalLayer_getProps(obj_handle_t layer, struct WMTLayerProps *props);
 
 WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer);
+WINEMETAL_API obj_handle_t WMTCreateMetalViewWithOwnership(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer, uint32_t remote_root);
 
 WINEMETAL_API void ReleaseMetalView(obj_handle_t view);
 
@@ -2013,6 +2014,18 @@ WINEMETAL_API mach_port_t MTLTexture_createSharedMachPort(obj_handle_t texture);
  * CAContext id of a view made for another process's window (0 if it is not
  * one), and, in the window's process, a view showing that context. Release
  * the returned view with ReleaseMetalView. */
+/* Raw Win32 client pixels, relative to the root client. Zero is a real
+ * empty rectangle. Callers do not submit unknown geometry. Fixed-width fields
+ * keep the appended Unix call identical for PE32 and PE64. */
+struct WMTRemotePlacement {
+  int32_t x, y, width, height;
+  int32_t clip_x, clip_y, clip_width, clip_height;
+  int32_t root_width, root_height;
+  uint32_t order, visible;
+  uint32_t source_width, source_height;
+};
+WINEMETAL_API void WMTUpdateRemoteLayerHost(obj_handle_t view, const struct WMTRemotePlacement *placement);
+
 WINEMETAL_API uint32_t WMTRemoteLayerContextId(obj_handle_t view);
 WINEMETAL_API obj_handle_t WMTHostRemoteLayer(intptr_t hwnd, uint32_t context_id);
 /* The size of such a view's layer in the other process's window. */

@@ -1109,7 +1109,8 @@ MakeDispatchData(void *native_ptr, uint64_t length) {
 }
 
 inline Object
-CreateMetalViewFromHWND(intptr_t hwnd, Device device, MetalLayer &layer) {
+CreateMetalViewFromHWND(intptr_t hwnd, Device device, MetalLayer &layer, bool remote_root = false) {
+  if (remote_root) return {::WMTCreateMetalViewWithOwnership(hwnd, device.handle, &layer.handle, 1)};
   return {::CreateMetalViewFromHWND(hwnd, device.handle, &layer.handle)};
 }
 

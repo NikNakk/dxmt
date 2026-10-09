@@ -463,6 +463,16 @@ struct unixcall_mtldevice_newicb {
   obj_handle_t ret;
 };
 
+struct unixcall_create_metal_view_with_ownership {
+  struct unixcall_create_metal_view_from_hwnd base;
+  uint32_t remote_root;
+  uint32_t reserved;
+};
+struct unixcall_update_remote_layer_host {
+  obj_handle_t view;
+  struct WMTRemotePlacement placement;
+};
+
 #pragma pack(pop)
 
 #endif
