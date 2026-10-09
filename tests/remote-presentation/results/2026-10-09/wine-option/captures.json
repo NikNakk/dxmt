@@ -1,0 +1,34 @@
+[
+  {
+    "trial": "same-final",
+    "samples": 40,
+    "valid": 31,
+    "inconclusive": 9,
+    "black_valid": 0,
+    "white_valid": 20
+  },
+  {
+    "trial": "same-preserved",
+    "samples": 40,
+    "valid": 36,
+    "inconclusive": 4,
+    "black_valid": 0,
+    "white_valid": 0
+  },
+  {
+    "trial": "same-child-verified",
+    "samples": 40,
+    "valid": 27,
+    "inconclusive": 13,
+    "black_valid": 0,
+    "white_valid": 0
+  },
+  {
+    "trial": "same-siblings-verified",
+    "samples": 40,
+    "valid": 30,
+    "inconclusive": 10,
+    "black_valid": 0,
+    "white_valid": 0
+  }
+]

@@ -177,14 +177,19 @@ to the host, and source metadata changes only on resource establishment/resize.
 | --- | --- |
 | unset / other value | Keep the existing default cross-process rejection; ordinary local swapchains still work. |
 | `offscreen` | Create a diagnostic Metal target when local presentation is unavailable; no remote host or publication. Successful Present does not mean visible output. |
+| `wine` | Experimental Wine-managed local-root/child presentation; requires the optional provider patch and fails gracefully when unsupported. |
+| `auto` | Prefer the optional Wine provider for supported local ownership; otherwise use the existing DXMT path before resource acquisition. |
 | `host` | Opt into the hardened DXMT CAContext/CALayerHost path on CrossOver 26.3 and compatible Wine engines. |
 | `DXMT_REMOTE_LAYER_DEBUG=1` | Enable detailed lifecycle/placement diagnostics. |
 | `DXMT_REMOTE_LAYER_DISABLE_PRIVATE_API=1` | Deliberately disable remote private APIs for failure testing; ordinary local presentation remains available. |
 
-`auto` is deliberately not added until a tested Wine backend exists. It must
-negotiate capabilities, prefer Wine where complete, and fall back before acquiring
-resources. Existing `host` must keep selecting the proven fallback. A backend
-must remain fixed for a swapchain's lifetime; no two mechanisms may host it.
+The experimental Wine option and `auto` are documented in
+[Wine-managed presentation](wine-metal-presentation-option.md). `host` continues
+to select DXMT, including on CrossOver 26.3. The optional provider currently
+supports local Cocoa roots and children; remote Wine ownership remains future
+work. Exactly one backend owns each swapchain. Operational acquisition failures
+do not trigger automatic fallback. `auto`, like `host`, pins the host DLLs for
+safe process-lifetime fallback hosting.
 
 Install matching DXGI, D3D11, winemetal.dll and winemetal.so together. The appended
 Unix calls use fixed-width payloads and matching PE64/WoW64 table entries. Do not
@@ -228,7 +233,9 @@ The separately downloaded upstream Wine 11.19 source has the client-surface
 interface but still explicitly rejects cross-process children in window.c.
 Simply upgrading Wine does not establish CEF correctness.
 
-An independently implementable plan for the modern engine:
+A limited provider is now implemented and tested separately; see
+[the optional Wine patch and validation](wine-metal-presentation-option.md).
+The following plan remains for complete **remote** Wine-managed presentation:
 
 1. Add generic child remote-surface support inside winemac: keep child identity,
    find the realized root, pass child geometry/clip/order through remote-layer
@@ -239,7 +246,7 @@ An independently implementable plan for the modern engine:
    alone is insufficient.
 3. Export a separate `macdrv_metal_presentation_query_v1` interface with an exact
    caller size, ABI version, capabilities, and explicit acquire/release methods.
-   **This name is a proposed contract, not an existing Wine export.** Capability
+   **This export exists only in our optional patch, not vanilla Wine.** Remote capability
    bits must distinguish root, child, geometry/visibility, stacking, and replacement
    support. Never extend the fixed-size macdrv_functions_t table.
 4. Return an opaque surface token and retained CAMetalLayer with a documented

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "boot",
+    "mode": "host",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "wine-missing-rejected",
+    "mode": "wine",
+    "code": 1,
+    "expected": 1,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "auto-same",
+    "mode": "auto",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "auto-root",
+    "mode": "auto",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "auto-owned-child",
+    "mode": "auto",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "auto-siblings",
+    "mode": "auto",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "auto-terminate",
+    "mode": "auto",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "host-root",
+    "mode": "host",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  },
+  {
+    "name": "offscreen-root",
+    "mode": "offscreen",
+    "code": 0,
+    "expected": 0,
+    "timed_out": false,
+    "assertions_passed": true
+  }
+]

@@ -159,3 +159,18 @@ appears; it is not modified by staging.
 See [Wine 11.19 comparison preparation](../../docs/wine-11.19-comparison.md) for
 the isolated build, launchers, crypto/HTTPS/Vulkan smoke executable and matching
 OpenXR bridge. This does not change the production CrossOver runtime.
+
+## Optional Wine presentation backend
+
+See [the experimental provider](../../docs/wine-metal-presentation-option.md)
+for the independently applicable Wine patch, isolated build/staging and exact
+validation commands. `same-child` and `same-siblings` exercise Wine-owned local
+children in the fixture process; remote fixtures remain separate processes.
+`DXMT_TEST_TITLE` gives captures a unique window caption. The focused
+`run_wine_backend.py` suite requires a fresh prefix and checks both the optional
+provider and fallback. Its return-code assertions do not certify visible output.
+
+`capture_wine_backend.py` runs explicit `same-siblings-back` (green) and
+`same-siblings-front` (red) controls plus sibling churn. Static controls assert
+Win32 order before capture and check actual central colors. Dynamic samples
+check blank/white content but do not assert every paint transition.

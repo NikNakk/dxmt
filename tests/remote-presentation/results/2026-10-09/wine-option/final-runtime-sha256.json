@@ -1,0 +1,8 @@
+{
+  "x86_64-windows/d3d11.dll": "6efeda9694c415f43e5d128950f45dfaa1ace483c034e9fccdd4cc4096422fb2",
+  "x86_64-windows/dxgi.dll": "4fc6a26b0bc32f71e6a08284af924170d7c90955d3e318fca9c20065654a772f",
+  "x86_64-windows/winemetal.dll": "8150f61cd55310cadef3513459994a8bae72d49afbf16b65afd43cf8c8e88402",
+  "x86_64-unix/winemetal.so": "fcf02df64ca69aa5e8434bc8f3f305d76d1fdf0f323e9a318240176238aa5c1b",
+  "x86_64-unix/winemac.so": "d55606a98bfdc172c7a5e63443d6f59f38891f32b53bd4ecda9598329d6c2619",
+  "x86_64-unix/win32u.so": "e2645b0766191dccb56daf8dacda6197e7da18d805fb79be03ce7a5710c4ad5e"
+}

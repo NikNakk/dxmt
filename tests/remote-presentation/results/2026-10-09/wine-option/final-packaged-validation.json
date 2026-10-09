@@ -1,0 +1,18 @@
+[
+  {
+    "mode": "wine",
+    "fixture": "same-siblings",
+    "code": 0,
+    "assertions_passed": true,
+    "created_tokens": 42,
+    "released_tokens": 42,
+    "max_owned_tokens": 3,
+    "remaining_tokens": 0
+  },
+  {
+    "mode": "auto",
+    "fixture": "root",
+    "code": 0,
+    "assertions_passed": true
+  }
+]

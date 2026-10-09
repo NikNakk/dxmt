@@ -1,0 +1,17 @@
+[
+  {
+    "mode": "",
+    "fixture": "same",
+    "code": 0
+  },
+  {
+    "mode": "wine",
+    "fixture": "same-siblings",
+    "code": 0
+  },
+  {
+    "mode": "auto",
+    "fixture": "root",
+    "code": 0
+  }
+]
