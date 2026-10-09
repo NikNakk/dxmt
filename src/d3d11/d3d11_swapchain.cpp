@@ -816,13 +816,21 @@ public:
       });
     }
     device_context_->Commit();
+    bool notify_presentation = !native_view_submitted_ || (remote_context_id_ && !remote_generation_);
 
     lock.unlock(); // since PresentBoundary() will and should only stall current thread
 
     cmd_queue.PresentBoundary();
+    // Serialize first-submission state after the boundary wait. Concurrent
+    // Present calls must not publish/reveal the same view more than once.
+    if (notify_presentation) lock.lock();
     // Publish only after the first presentation has been submitted. Hosting
     // acknowledges attachment, not GPU completion or first visible pixels.
-    if (remote_context_id_ && !remote_generation_)
+    if (notify_presentation && !native_view_submitted_) {
+      ::WMTMetalViewSubmitted(native_view_.handle);
+      native_view_submitted_ = true;
+    }
+    if (notify_presentation && remote_context_id_ && !remote_generation_)
       remote_generation_ = PublishRemoteLayer(hWnd, remote_context_id_, remote_width_, remote_height_);
 
     return hr;
@@ -1076,6 +1084,7 @@ private:
   Com<IMTLDXGIDevice> dxgi_device_;
   HRESULT initialization_result_ = S_OK;
   WMT::Object native_view_;
+  bool native_view_submitted_ = false;
   WMT::MetalLayer layer_weak_;
   uint32_t remote_context_id_ = 0;
   uint32_t remote_generation_ = 0;

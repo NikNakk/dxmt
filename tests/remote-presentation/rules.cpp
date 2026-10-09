@@ -1,3 +1,4 @@
+#include "../../src/winemetal/wine_metal_presentation.h"
 #include "../../src/d3d11/d3d11_remote_protocol.hpp"
 #include "../../src/winemetal/remote_layer_geometry.h"
 #include "../../src/winemetal/winemetal_thunks.h"
@@ -7,7 +8,21 @@
 #include <utility>
 #include <initializer_list>
 
+static int provider_create(uintptr_t, void *, void **, void **) { return 0; }
+static void provider_callback(void *) {}
 int main() {
+  wine_metal_presentation_v1 api = {sizeof(api), 1, WINE_METAL_PRESENTATION_LOCAL, 0,
+                                   provider_create, provider_callback, provider_callback};
+  assert(wine_metal_presentation_valid(&api));
+  assert(!wine_metal_presentation_valid(nullptr));
+  api.size = sizeof(uint32_t);
+  assert(!wine_metal_presentation_valid(&api));
+  api.size = sizeof(api); api.version = 2;
+  assert(!wine_metal_presentation_valid(&api));
+  api.version = 1; api.capabilities = 0;
+  assert(!wine_metal_presentation_valid(&api));
+  api.capabilities = WINE_METAL_PRESENTATION_LOCAL; api.release = nullptr;
+  assert(!wine_metal_presentation_valid(&api));
   using namespace dxmt;
   RemoteLayerIdentity a{10, 20, 1, 100, 200}, b{11, 20, 2, 100, 200};
   assert(a == a && !(a == b));

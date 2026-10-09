@@ -13,6 +13,7 @@
 #define WINEMETAL_API
 #include "../winemetal_thunks.h"
 #include "../remote_layer_geometry.h"
+#include "../wine_metal_presentation.h"
 #include "../airconv_thunks.h"
 
 typedef int NTSTATUS;
@@ -1818,11 +1819,73 @@ dxmt_debug_remote(void) {
   return value && !strcmp(value, "1");
 }
 
+/* Opaque Wine ownership: no private window-data layout crosses this ABI. */
+@interface DXMTWinePresentation : NSObject {
+@public
+  struct wine_metal_presentation_v1 api;
+  void *token;
+  BOOL submitted;
+}
+@end
+@implementation DXMTWinePresentation
+- (void)dealloc {
+  if (token) {
+    if (dxmt_debug_remote()) fprintf(stderr, "winemetal: release Wine client surface token %p\n", token);
+    api.release(token);
+  }
+  [super dealloc];
+}
+@end
+
+static NTSTATUS _WMTMetalViewSubmitted(void *obj) {
+  struct unixcall_generic_obj_noret *params = obj;
+  id view = (id)params->handle;
+  if ([view isKindOfClass:[DXMTWinePresentation class]]) {
+    DXMTWinePresentation *presentation = view;
+    if (!presentation->submitted) {
+      presentation->api.submitted(presentation->token);
+      presentation->submitted = YES;
+      if (dxmt_debug_remote()) fprintf(stderr, "winemetal: submit Wine client surface token %p\n", presentation->token);
+    }
+  }
+  return STATUS_SUCCESS;
+}
+
 static NTSTATUS _ReleaseMetalView(void *obj);
 
 static NTSTATUS
 create_metal_view(struct unixcall_create_metal_view_from_hwnd *params, bool remote_root) {
   params->ret_view = params->ret_layer = NULL_OBJECT_HANDLE;
+  const char *mode = getenv("DXMT_CROSS_PROCESS_SWAPCHAIN");
+  bool wine_only = mode && !strcmp(mode, "wine");
+  bool automatic = mode && !strcmp(mode, "auto");
+  if (wine_only || automatic) {
+    wine_metal_presentation_query_fn query = dlsym(RTLD_DEFAULT, "macdrv_metal_presentation_query_v1");
+    const struct wine_metal_presentation_v1 *api = query ? query(WINE_METAL_PRESENTATION_VERSION) : NULL;
+    int result = WINE_METAL_PRESENTATION_UNSUPPORTED;
+    if (wine_metal_presentation_valid(api)) {
+      DXMTWinePresentation *view = [DXMTWinePresentation new];
+      view->api = *api;
+      void *layer = NULL;
+      result = api->create((uintptr_t)params->hwnd, (void *)params->device, &view->token, &layer);
+      if (!result && view->token && layer) {
+        params->ret_view = (obj_handle_t)view;
+        params->ret_layer = (obj_handle_t)layer;
+        if (dxmt_debug_remote()) fprintf(stderr, "winemetal: Wine client surface HWND %llx token %p\n",
+            (unsigned long long)params->hwnd, view->token);
+        return STATUS_SUCCESS;
+      }
+      /* An inconsistent provider must not authorize fallback after touching
+       * resources, even if it incorrectly labels that failure unsupported. */
+      if (!result || view->token || layer) result = WINE_METAL_PRESENTATION_FAILED;
+      [view release];
+    }
+    if (dxmt_debug_remote()) fprintf(stderr, "winemetal: Wine presentation unavailable HWND %llx result %d mode %s\n",
+        (unsigned long long)params->hwnd, result, mode);
+    /* Only unsupported capability permits fallback. Operational errors stop
+     * here; no competing backend is installed after a partial acquisition. */
+    if (wine_only || result != WINE_METAL_PRESENTATION_UNSUPPORTED) return STATUS_UNSUCCESSFUL;
+  }
   struct macdrv_win_data *(*get_data)(HWND) = NULL;
   void (*release_data)(struct macdrv_win_data *) = NULL;
   macdrv_metal_view (*create_view)(macdrv_view, macdrv_metal_device) = NULL;
@@ -1868,8 +1931,7 @@ create_metal_view(struct unixcall_create_metal_view_from_hwnd *params, bool remo
   // exact local Cocoa root first; never choose the key window as a substitute.
   if (!remote_root) create_wine_window_metal_view(params);
   if (params->ret_view && params->ret_layer) return STATUS_SUCCESS;
-  const char *mode = getenv("DXMT_CROSS_PROCESS_SWAPCHAIN");
-  if (mode && !strcmp(mode, "host")) {
+  if (mode && (!strcmp(mode, "host") || automatic)) {
     if (!dxmt_remote_layer_supported()) {
       if (dxmt_debug_remote()) fprintf(stderr, "winemetal: private remote presentation API unavailable\n");
       return STATUS_UNSUCCESSFUL;
@@ -2006,6 +2068,10 @@ _ReleaseMetalView(void *obj) {
   struct unixcall_generic_obj_noret *params = obj;
   if (!params->handle) return STATUS_SUCCESS;
 
+  if ([(id)params->handle isKindOfClass:[DXMTWinePresentation class]]) {
+    [(id)params->handle release];
+    return STATUS_SUCCESS;
+  }
   Class context_class = NSClassFromString(@"CAContext");
   if (context_class && [(id)params->handle isKindOfClass:context_class]) {
     execute_on_main(^{
@@ -3819,6 +3885,7 @@ const void *__wine_unix_call_funcs[] = {
     &_WMTSetRemoteLayerFrame,
     &_WMTUpdateRemoteLayerHost,
     &_WMTCreateMetalViewWithOwnership,
+    &_WMTMetalViewSubmitted,
 };
 
 #ifndef DXMT_NATIVE
@@ -3980,5 +4047,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_WMTSetRemoteLayerFrame,
     &_WMTUpdateRemoteLayerHost,
     &_WMTCreateMetalViewWithOwnership,
+    &_WMTMetalViewSubmitted,
 };
 #endif

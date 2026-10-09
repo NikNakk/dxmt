@@ -1780,6 +1780,7 @@ WINEMETAL_API void MetalLayer_setProps(obj_handle_t layer, const struct WMTLayer
 WINEMETAL_API void MetalLayer_getProps(obj_handle_t layer, struct WMTLayerProps *props);
 
 WINEMETAL_API obj_handle_t CreateMetalViewFromHWND(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer);
+WINEMETAL_API void WMTMetalViewSubmitted(obj_handle_t view);
 WINEMETAL_API obj_handle_t WMTCreateMetalViewWithOwnership(intptr_t hwnd, obj_handle_t device, obj_handle_t *layer, uint32_t remote_root);
 
 WINEMETAL_API void ReleaseMetalView(obj_handle_t view);

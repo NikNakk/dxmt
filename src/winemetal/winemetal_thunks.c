@@ -1437,3 +1437,9 @@ WMTCreateMetalViewWithOwnership(intptr_t hwnd, obj_handle_t device, obj_handle_t
   *layer = params.base.ret_layer;
   return params.base.ret_view;
 }
+
+WINEMETAL_API void
+WMTMetalViewSubmitted(obj_handle_t view) {
+  struct unixcall_generic_obj_noret params = {view};
+  UNIX_CALL(157, &params);
+}

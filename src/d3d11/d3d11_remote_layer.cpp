@@ -287,7 +287,7 @@ DWORD WINAPI Bootstrap(LPVOID) {
 
 bool CrossProcessSwapchainEnabled() {
   auto mode = env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN");
-  return mode == "offscreen" || mode == "host";
+  return mode == "offscreen" || mode == "host" || mode == "auto" || mode == "wine";
 }
 uint32_t PublishRemoteLayer(HWND hwnd, uint32_t id, uint32_t width, uint32_t height) {
   WindowLock lock(hwnd);
@@ -361,7 +361,8 @@ void RetireRemoteLayer(HWND hwnd, uint32_t id, uint32_t generation, WMT::Object 
   }
 }
 void StartRemoteLayerHost() {
-  if (env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN") != "host") return;
+  auto mode = env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN");
+  if (mode != "host" && mode != "auto") return;
   wchar_t name[96];
   EventName(GetCurrentProcessId(), name);
   HANDLE event = CreateEventW(nullptr, FALSE, TRUE, name);
@@ -374,7 +375,8 @@ void StartRemoteLayerHost() {
 void QueueRemoteLayerHost() {
   // Pin before queueing so FreeLibrary cannot unmap a pending callback.
   // This explicit opt-in trades unloadability for safe process-lifetime hosting.
-  if (env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN") != "host") return;
+  auto mode = env::getEnvVar("DXMT_CROSS_PROCESS_SWAPCHAIN");
+  if (mode != "host" && mode != "auto") return;
   HMODULE module = nullptr;
   if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
       reinterpret_cast<LPCWSTR>(&Bootstrap), &module)) return;
