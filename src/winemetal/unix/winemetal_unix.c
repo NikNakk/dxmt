@@ -1700,6 +1700,40 @@ struct macdrv_functions_t {
 }
 @end
 
+/* The view showing another process's swapchain in a window's content view.
+ * Wine's content views do not autoresize their subviews, and a swapchain can
+ * be hosted before its window has a size (Steam's sign-in window and launch
+ * dialogs are hosted at 0x0), so follow the content view's bounds here. */
+@interface DXMTRemoteLayerHostView : DXMTWineMetalView
+@end
+
+@implementation DXMTRemoteLayerHostView
+- (void)viewDidMoveToSuperview {
+  NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+  [center removeObserver:self name:NSViewFrameDidChangeNotification object:nil];
+  NSView *superview = self.superview;
+  if (!superview) return;
+  superview.postsFrameChangedNotifications = YES;
+  [center addObserver:self
+             selector:@selector(superviewFrameDidChange:)
+                 name:NSViewFrameDidChangeNotification
+               object:superview];
+  self.frame = superview.bounds;
+}
+
+- (void)superviewFrameDidChange:(NSNotification *)notification {
+  self.frame = self.superview.bounds;
+  if (getenv("DXMT_REMOTE_LAYER_DEBUG"))
+    fprintf(stderr, "winemetal: remote layer view %p follows its content view to %.0fx%.0f\n", self,
+            self.frame.size.width, self.frame.size.height);
+}
+
+- (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [super dealloc];
+}
+@end
+
 /* Cross-process presentation (DXMT_CROSS_PROCESS_SWAPCHAIN=host). A swapchain
  * for another process's window renders into a layer attached to a CAContext;
  * the window's process shows that context through a CALayerHost. These are
@@ -1873,8 +1907,7 @@ _WMTHostRemoteLayer(void *obj) {
   DXMTCAContextID context_id = (DXMTCAContextID)params->arg;
   if (content) {
     execute_on_main(^{
-      DXMTWineMetalView *view = [[DXMTWineMetalView alloc] initWithFrame:content.bounds];
-      view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      DXMTRemoteLayerHostView *view = [[DXMTRemoteLayerHostView alloc] initWithFrame:content.bounds];
       CALayerHost *host = [[NSClassFromString(@"CALayerHost") alloc] init];
       host.contextId = context_id;
       host.anchorPoint = CGPointZero;
