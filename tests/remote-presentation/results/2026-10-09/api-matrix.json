@@ -1,0 +1,37 @@
+[
+  {
+    "test": "same-host",
+    "exit": 0,
+    "log": "/tmp/dxmt-regression-same-host.log"
+  },
+  {
+    "test": "root-host",
+    "exit": 0,
+    "log": "/tmp/dxmt-regression-root-host.log"
+  },
+  {
+    "test": "owned-child-host",
+    "exit": 0,
+    "log": "/tmp/dxmt-regression-owned-child-host.log"
+  },
+  {
+    "test": "siblings-host",
+    "exit": 0,
+    "log": "/tmp/dxmt-regression-siblings-host.log"
+  },
+  {
+    "test": "child-offscreen",
+    "exit": 0,
+    "log": "/tmp/dxmt-regression-child-offscreen.log"
+  },
+  {
+    "test": "child-host-no-private",
+    "exit": 1,
+    "log": "/tmp/dxmt-regression-child-host-no-private.log"
+  },
+  {
+    "test": "terminate-host",
+    "exit": 0,
+    "log": "/tmp/dxmt-regression-terminate-host.log"
+  }
+]
