@@ -19,6 +19,7 @@
 #include "dxmt_keyed_mutex.hpp"
 #include "log/log.hpp"
 #include <random>
+#include <chrono>
 
 namespace dxmt {
 
@@ -130,8 +131,12 @@ KeyedMutex::import(WMT::Device device, D3DKMT_HANDLE global_kmt) {
 }
 
 NTSTATUS
-KeyedMutex::runOnOwnerThread(const std::function<NTSTATUS()> &call) {
+KeyedMutex::runOnOwnerThread(const std::function<NTSTATUS()> &call, const char *operation, uint64_t key,
+                            uint32_t timeout_ms) {
+  using Clock = std::chrono::steady_clock;
+  auto started = Clock::now();
   std::unique_lock<dxmt::mutex> serial(call_lock_);
+  auto serialized = Clock::now();
   std::unique_lock<dxmt::mutex> lock(owner_lock_);
   if (!owner_thread_.joinable()) {
     owner_thread_ = dxmt::thread([this] {
@@ -151,11 +156,35 @@ KeyedMutex::runOnOwnerThread(const std::function<NTSTATUS()> &call) {
       }
     });
   }
+  Clock::time_point entered, finished;
+  std::function<NTSTATUS()> measuredCall = [&] {
+    entered = Clock::now();
+    NTSTATUS result = call();
+    finished = Clock::now();
+    return result;
+  };
   owner_done_ = false;
-  owner_call_ = &call;
+  auto queued = Clock::now();
+  owner_call_ = &measuredCall;
   owner_cond_.notify_all();
   owner_cond_.wait(lock, [this] { return owner_done_; });
-  return owner_result_;
+  auto returned = Clock::now();
+  NTSTATUS result = owner_result_;
+  lock.unlock();
+  serial.unlock();
+  auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+  if (ms(started, returned) >= 10.0 || result) {
+    static std::atomic<uint64_t> slow_calls[2]{};
+    uint64_t count = ++slow_calls[operation[0] == 'a' ? 0 : 1];
+    if (count <= 8 || count % 128 == 0) {
+      WARN("KeyedMutex owner phases: tick_ms=", GetTickCount64(), " pid=", GetCurrentProcessId(), " caller=", GetCurrentThreadId(),
+           " handle=", global_kmt_, " op=", operation, " key=", key, " timeout_ms=", timeout_ms,
+           " status=", result, " serial_ms=", ms(started, serialized),
+           " dispatch_ms=", ms(serialized, queued), " wake_ms=", ms(queued, entered),
+           " wine_ms=", ms(entered, finished), " return_ms=", ms(finished, returned), " count=", count);
+    }
+  }
+  return result;
 }
 
 HRESULT
@@ -178,7 +207,7 @@ KeyedMutex::acquire(KeyedMutexAcquire &&func_acquire, uint64_t key, uint32_t mil
     acquire.pTimeout = &timeout;
   }
 
-  NTSTATUS status = runOnOwnerThread([&acquire] { return D3DKMTAcquireKeyedMutex(&acquire); });
+  NTSTATUS status = runOnOwnerThread([&acquire] { return D3DKMTAcquireKeyedMutex(&acquire); }, "acquire", key, milliseconds);
   if (status == STATUS_TIMEOUT)
     return WAIT_TIMEOUT;
   if (status == STATUS_ABANDONED_WAIT_0)
@@ -188,7 +217,10 @@ KeyedMutex::acquire(KeyedMutexAcquire &&func_acquire, uint64_t key, uint32_t mil
     return E_FAIL;
   }
 
+  ownership_granted_ = std::chrono::steady_clock::now();
+  ownership_tick_ms_ = GetTickCount64();
   func_acquire(acquire.FenceValue);
+  ownership_ready_ = std::chrono::steady_clock::now();
 
   fence_value_ = acquire.FenceValue;
   owned_.store(true, std::memory_order_release);
@@ -203,19 +235,37 @@ KeyedMutex::release(KeyedMutexRelease &&func_release, uint64_t key) {
   if (!owned_.load(std::memory_order_acquire))
     return E_FAIL;
 
+  auto release_entered = std::chrono::steady_clock::now();
   func_release(fence_value_ + 1);
+  auto signal_queued = std::chrono::steady_clock::now();
 
   D3DKMT_RELEASEKEYEDMUTEX release = {};
   release.hKeyedMutex = local_kmt_;
   release.Key = key;
   release.FenceValue = fence_value_ + 1;
 
-  if (runOnOwnerThread([&release] { return D3DKMTReleaseKeyedMutex(&release); })) {
+  if (runOnOwnerThread([&release] { return D3DKMTReleaseKeyedMutex(&release); }, "release", key, 0)) {
     WARN("KeyedMutex: Failed to release keyed mutex.");
     return E_FAIL;
   }
 
+  auto finished = std::chrono::steady_clock::now();
   owned_.store(false, std::memory_order_release);
+  auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+  if (ms(ownership_granted_, ownership_ready_) >= 10.0 ||
+      ms(ownership_ready_, release_entered) >= 10.0 || ms(release_entered, finished) >= 10.0) {
+    static std::atomic<uint64_t> long_ownerships{0};
+    uint64_t count = ++long_ownerships;
+    if (count <= 8 || count % 128 == 0) {
+      WARN("KeyedMutex ownership interval: pid=", GetCurrentProcessId(), " caller=", GetCurrentThreadId(),
+           " handle=", global_kmt_, " acquired_tick_ms=", ownership_tick_ms_, " released_tick_ms=", GetTickCount64(),
+           " release_fence=", fence_value_ + 1,
+           " acquire_setup_ms=", ms(ownership_granted_, ownership_ready_),
+           " app_owned_ms=", ms(ownership_ready_, release_entered),
+           " signal_enqueue_ms=", ms(release_entered, signal_queued),
+           " release_handoff_ms=", ms(signal_queued, finished), " count=", count);
+    }
+  }
   return S_OK;
 }
 

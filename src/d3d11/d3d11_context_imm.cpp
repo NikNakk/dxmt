@@ -1,3 +1,5 @@
+#include <chrono>
+#include <unordered_map>
 #include "config/config.hpp"
 #include "d3d11_fence.hpp"
 #include "d3d11_private.h"
@@ -77,8 +79,13 @@ public:
       cmd_queue(cmd_queue),
       ctx_state({cmd_queue}),
       d3dmt_(this, mutex) {
+        cmd_queue.ownership_diagnostics = mutex.ownership_diagnostics;
         ignore_map_flag_no_wait_ = Config::getInstance().getOption<bool>("d3d11.ignoreMapFlagNoWait", false);
       }
+
+  ~MTLD3D11ImmediateContext() override {
+    mutex.ownership_diagnostics->active.fetch_sub(ownership_windows_.size(), std::memory_order_relaxed);
+  }
 
   HRESULT
   STDMETHODCALLTYPE
@@ -486,6 +493,7 @@ public:
   STDMETHODCALLTYPE
   Flush1(D3D11_CONTEXT_TYPE Type, HANDLE hEvent) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    OwnershipWaitDiagnostics::Scope timing(mutex.ownership_diagnostics.get(), OwnershipWaitDiagnostics::Flush);
 
     if (ctx_state.has_dirty_op_since_last_event || promote_flush) {
       InvalidateCurrentPass(true);
@@ -593,6 +601,8 @@ public:
   };
 
   HRESULT STDMETHODCALLTYPE Signal(ID3D11Fence *pFence, UINT64 Value) override {
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+
     auto fence = static_cast<MTLD3D11Fence *>(pFence);
 
     InvalidateCurrentPass();
@@ -605,6 +615,8 @@ public:
   }
 
   HRESULT STDMETHODCALLTYPE Wait(ID3D11Fence *pFence, UINT64 Value) override {
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+
     auto fence = static_cast<MTLD3D11Fence *>(pFence);
 
     Flush();
@@ -639,17 +651,35 @@ public:
         },
         Key, dwMilliseconds
     );
+    if (hr == S_OK) {
+      auto handle = resource->keyedMutex()->globalHandle();
+      auto &diagnostics = *mutex.ownership_diagnostics;
+      auto [entry, inserted] = ownership_windows_.try_emplace(handle,
+          OwnershipWindow{diagnostics.snapshot(), std::chrono::steady_clock::now(), GetTickCount64()});
+      if (inserted) diagnostics.active.fetch_add(1, std::memory_order_relaxed);
+    }
     LogKeyedMutexCall("AcquireSync", resource->keyedMutex()->globalHandle(), Key, hr);
     return hr;
   }
   HRESULT
   ReleaseSync(ID3D11Resource *pResource, UINT64 Key) override {
+    auto entered = std::chrono::steady_clock::now();
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    auto locked = std::chrono::steady_clock::now();
+    auto signalled = locked;
+    bool signalQueued = false;
     auto resource = GetResourceCommon(pResource);
     if (!resource->keyedMutex()) {
       DEBUG("share: ReleaseSync on a resource without a keyed mutex: ", pResource);
       return DXGI_ERROR_INVALID_CALL;
     }
+    // Snapshot before the signal Flush so these categories describe app ownership,
+    // including contention entering ReleaseSync, separately from release enqueue.
+    auto &diagnostics = *mutex.ownership_diagnostics;
+    auto waits_before_release = diagnostics.snapshot();
+    auto release_entered_tick = GetTickCount64();
+    auto release_fence = resource->keyedMutex()->nextReleaseFence();
+    auto window = ownership_windows_.find(resource->keyedMutex()->globalHandle());
     HRESULT hr = resource->keyedMutex()->release(
         [&](uint64_t fence) {
           InvalidateCurrentPass(true);
@@ -657,9 +687,57 @@ public:
             enc.signalEvent(std::move(event), fence);
           });
           Flush();
+          signalled = std::chrono::steady_clock::now();
+          signalQueued = true;
         },
         Key
     );
+    auto finished = std::chrono::steady_clock::now();
+    auto milliseconds = [](auto duration) { return std::chrono::duration<double, std::milli>(duration).count(); };
+    if (milliseconds(finished - entered) >= 10.0 || hr != S_OK) {
+      static std::atomic<uint64_t> slowOrFailed = {0};
+      uint64_t count = slowOrFailed.fetch_add(1, std::memory_order_relaxed) + 1;
+      if (count <= 5 || count % 128 == 0) {
+        WARN("ReleaseSync timing: handle=", resource->keyedMutex()->globalHandle(), " key=", Key,
+             " hr=", hr, " lock_ms=", milliseconds(locked - entered),
+             " enqueue_ms=", milliseconds(signalled - locked), " owner_ms=", milliseconds(finished - signalled),
+             " signal_queued=", signalQueued, " count=", count);
+      }
+    }
+    if (hr == S_OK && window != ownership_windows_.end()) {
+      auto owned_ms = milliseconds(locked - window->second.ready);
+      if (owned_ms >= 10.0) {
+        uint64_t count = ++owned_wait_samples_;
+        if (count <= 8 || count % 128 == 0) {
+          auto delta_ms = [&](unsigned kind) {
+            return double(waits_before_release.ns[kind] - window->second.waits.ns[kind]) / 1e6;
+          };
+          auto calls = [&](unsigned kind) {
+            return waits_before_release.calls[kind] - window->second.waits.calls[kind];
+          };
+          WARN("KeyedMutex owned waits: pid=", GetCurrentProcessId(), " caller=", GetCurrentThreadId(),
+               " handle=", resource->keyedMutex()->globalHandle(), " acquired_tick_ms=", window->second.tick,
+               " release_entered_tick_ms=", release_entered_tick, " release_fence=", release_fence,
+               " app_owned_ms=", owned_ms,
+               " context_lock_ms=", delta_ms(OwnershipWaitDiagnostics::ContextLock),
+               " flush_ms=", delta_ms(OwnershipWaitDiagnostics::Flush),
+               " chunk_capacity_ms=", delta_ms(OwnershipWaitDiagnostics::ChunkCapacity),
+               " cpu_fence_ms=", delta_ms(OwnershipWaitDiagnostics::CPUFence),
+               " frame_latency_ms=", delta_ms(OwnershipWaitDiagnostics::FrameLatency),
+               " swapchain_latency_ms=", delta_ms(OwnershipWaitDiagnostics::SwapchainLatency),
+               " present_ms=", delta_ms(OwnershipWaitDiagnostics::Present),
+               " lock_calls=", calls(OwnershipWaitDiagnostics::ContextLock),
+               " flush_calls=", calls(OwnershipWaitDiagnostics::Flush),
+               " capacity_calls=", calls(OwnershipWaitDiagnostics::ChunkCapacity),
+               " cpu_fence_calls=", calls(OwnershipWaitDiagnostics::CPUFence),
+               " frame_latency_calls=", calls(OwnershipWaitDiagnostics::FrameLatency),
+               " swapchain_latency_calls=", calls(OwnershipWaitDiagnostics::SwapchainLatency),
+               " present_calls=", calls(OwnershipWaitDiagnostics::Present), " count=", count);
+        }
+      }
+      ownership_windows_.erase(window);
+      diagnostics.active.fetch_sub(1, std::memory_order_relaxed);
+    }
     LogKeyedMutexCall("ReleaseSync", resource->keyedMutex()->globalHandle(), Key, hr);
     return hr;
   }
@@ -674,6 +752,14 @@ private:
       DEBUG("share: ", call, " mutex 0x", str::format(std::hex, handle), " key ", key, " -> 0x",
             str::format(std::hex, (uint32_t)hr), " (call ", count, ")");
   }
+  struct OwnershipWindow {
+    OwnershipWaitDiagnostics::Snapshot waits;
+    std::chrono::steady_clock::time_point ready;
+    uint64_t tick;
+  };
+  // Uses the same context serialization contract as command submission.
+  std::unordered_map<D3DKMT_HANDLE, OwnershipWindow> ownership_windows_;
+  uint64_t owned_wait_samples_ = 0;
   std::atomic<uint64_t> keyed_mutex_calls_ = 0;
   std::vector<Com<MTLD3D11OcclusionQuery>> pending_occlusion_queries;
   CommandQueue &cmd_queue;

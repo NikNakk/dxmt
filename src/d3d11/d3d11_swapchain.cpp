@@ -735,8 +735,11 @@ public:
 
   SyncFrameState SyncFrame(uint64_t current_frame_id) {
     if (frame_latency_fence_) {
-      if (current_frame_id > frame_latency)
+      if (current_frame_id > frame_latency) {
+        OwnershipWaitDiagnostics::Scope timing(device_->mutex.ownership_diagnostics.get(),
+                                                OwnershipWaitDiagnostics::SwapchainLatency);
         frame_latency_fence_->wait(current_frame_id - frame_latency);
+      }
       return SyncFrameState(current_frame_id, frame_latency_fence_.get());
     }
     return SyncFrameState();
@@ -747,6 +750,8 @@ public:
   STDMETHODCALLTYPE
   Present1(UINT SyncInterval, UINT PresentFlags,
            const DXGI_PRESENT_PARAMETERS *pPresentParameters) final {
+    OwnershipWaitDiagnostics::Scope timing(device_->mutex.ownership_diagnostics.get(),
+                                            OwnershipWaitDiagnostics::Present);
     if (SyncInterval > 4)
       return DXGI_ERROR_INVALID_CALL;
 

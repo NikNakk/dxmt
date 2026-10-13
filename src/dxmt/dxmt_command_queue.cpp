@@ -105,7 +105,10 @@ CommandQueue::CommitCurrentChunk() {
   ready_for_encode.notify_one();
 
   auto t0 = clock::now();
-  chunk_ongoing.wait(kCommandChunkCount - 1, std::memory_order_acquire);
+  {
+    OwnershipWaitDiagnostics::Scope timing(ownership_diagnostics.get(), OwnershipWaitDiagnostics::ChunkCapacity);
+    chunk_ongoing.wait(kCommandChunkCount - 1, std::memory_order_acquire);
+  }
   chunk_ongoing.fetch_add(1, std::memory_order_relaxed);
   auto t1 = clock::now();
   statistics.commit_interval += (t1 - t0);

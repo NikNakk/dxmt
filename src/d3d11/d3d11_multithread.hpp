@@ -1,11 +1,14 @@
 #pragma once
 #include "d3d11_4.h"
 #include <atomic>
+#include <memory>
+#include "dxmt_ownership_diagnostics.hpp"
 
 namespace dxmt {
 
 class d3d11_device_mutex {
 public:
+  std::shared_ptr<OwnershipWaitDiagnostics> ownership_diagnostics = std::make_shared<OwnershipWaitDiagnostics>();
   void lock();
   void unlock() noexcept;
   bool try_lock() { return true; }
