@@ -234,14 +234,34 @@ public:
       WMT::Device device, WMT::CommandBuffer cmdbuf, uint64_t num_samples, TimestampQueryList &&queries
   ) :
       queries_(std::move(queries)),
-      num_samples_(num_samples) {
+      num_samples_(num_samples),
+      cmdbuf_(cmdbuf) {
     sample_buffer_ = device.newCounterSampleBuffer(num_samples, true);
   }
 
   ~TimestampReadbackSBuf() {
-    // TODO: small_vector opt
-    std::vector<uint64_t> results(num_samples_);
-    sample_buffer_.resolveCounterRange(0, num_samples_, results.data(), num_samples_ * sizeof(uint64_t));
+    /**
+    Each query was sampled at the start of a blit pass that a queue barrier keeps behind the work before it.
+    Apple GPUs report these timestamps in nanoseconds, in the same domain as `GPUStartTime`/`GPUEndTime`
+    (checked on Apple M5). A sample that is missing (no sample buffer, or `MTLCounterErrorValue`) or outside the
+    command buffer's GPU interval falls back to `gpuEndTime`, as `TimestampReadbackCBuf` does for every query.
+
+    `thread_local` makes sense because this destructor is only called on 1. finishing thread 2. (abnormal) device
+    destruction
+    */
+    thread_local uint64_t latest_ts_on_finish_thread = 0;
+    std::vector<uint64_t> results(num_samples_, 0);
+    if (sample_buffer_)
+      sample_buffer_.resolveCounterRange(0, num_samples_, results.data(), num_samples_ * sizeof(uint64_t));
+    uint64_t start = cmdbuf_.gpuStartTime();
+    uint64_t end = cmdbuf_.gpuEndTime();
+    for (auto &value : results) {
+      if (value == 0 || value == ~0ull || value < start || value > end)
+        value = end;
+      // Later queries must not return earlier timestamps.
+      latest_ts_on_finish_thread = std::max(value, latest_ts_on_finish_thread);
+      value = latest_ts_on_finish_thread;
+    }
     for (const auto &[query, sample_index] : queries_) {
       query->issue(results[sample_index]);
     }
@@ -259,6 +279,7 @@ private:
   TimestampQueryList queries_;
   WMT::Reference<WMT::CounterSampleBuffer> sample_buffer_;
   uint64_t num_samples_;
+  WMT::CommandBuffer cmdbuf_;
 };
 
 class TimestampReadbackCBuf {
@@ -303,7 +324,9 @@ private:
 };
 
 // compile-time: choose a timestamp impl: SBuf (sample buffer) or CBuf (command buffer `gpuEndTime`)
-using TimestampReadback = TimestampReadbackCBuf;
+// CBuf gives every query in a command buffer the same value, so a begin/end pair in one buffer reads about zero
+// and engines that scale resolution from GPU time (Source 2's auto-fidelity) see false headroom.
+using TimestampReadback = TimestampReadbackSBuf;
 
 class TimestampQueryState {
 public:
