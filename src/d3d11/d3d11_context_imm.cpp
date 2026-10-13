@@ -374,6 +374,7 @@ public:
       break;
     }
     case D3D11_QUERY_TIMESTAMP: {
+      LogTimestampQuery();
       if (auto query = static_cast<MTLD3D11TimestampQuery *>(pAsync)->End()) {
         InvalidateCurrentPass(true);
         EmitOP([query = Rc(query)](ArgumentEncodingContext &enc) mutable {
@@ -752,6 +753,15 @@ private:
       DEBUG("share: ", call, " mutex 0x", str::format(std::hex, handle), " key ", key, " -> 0x",
             str::format(std::hex, (uint32_t)hr), " (call ", count, ")");
   }
+  /* Diagnostic: which devices issue timestamp queries, and how often. */
+  void
+  LogTimestampQuery() {
+    uint64_t count = timestamp_queries_++;
+    if (count == 0 || count % 4096 == 0)
+      WARN("Timestamp queries: context ", this, " device ", device, " feature level 0x",
+           str::format(std::hex, (uint32_t)device->GetFeatureLevel()), " queries ", count + 1);
+  }
+  uint64_t timestamp_queries_ = 0;
   struct OwnershipWindow {
     OwnershipWaitDiagnostics::Snapshot waits;
     std::chrono::steady_clock::time_point ready;

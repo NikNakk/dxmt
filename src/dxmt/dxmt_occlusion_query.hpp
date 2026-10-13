@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Metal.hpp"
+#include "log/log.hpp"
 #include "rc/util_rc_ptr.hpp"
 #include "wsi_platform.hpp"
 #include <atomic>
@@ -255,7 +256,17 @@ public:
       sample_buffer_.resolveCounterRange(0, num_samples_, results.data(), num_samples_ * sizeof(uint64_t));
     uint64_t start = cmdbuf_.gpuStartTime();
     uint64_t end = cmdbuf_.gpuEndTime();
+    // Diagnostic counts for this process: sampled values and each fallback reason.
+    static std::atomic<uint64_t> readbacks = 0, sampled = 0, no_buffer = 0, error_value = 0, out_of_range = 0;
     for (auto &value : results) {
+      if (!sample_buffer_)
+        no_buffer++;
+      else if (value == 0 || value == ~0ull)
+        error_value++;
+      else if (value < start || value > end)
+        out_of_range++;
+      else
+        sampled++;
       if (value == 0 || value == ~0ull || value < start || value > end)
         value = end;
       // Later queries must not return earlier timestamps.
@@ -265,6 +276,11 @@ public:
     for (const auto &[query, sample_index] : queries_) {
       query->issue(results[sample_index]);
     }
+    uint64_t count = readbacks++;
+    if (count < 4 || count % 4096 == 0)
+      WARN("Timestamp readback ", count + 1, ": samples ", num_samples_, " queries ", queries_.size(),
+           " command buffer GPU ", (end - start) / 1000, " us; totals sampled ", sampled.load(), " no buffer ",
+           no_buffer.load(), " error ", error_value.load(), " out of range ", out_of_range.load());
   }
 
   TimestampReadbackSBuf(const TimestampReadbackSBuf &) = delete;
