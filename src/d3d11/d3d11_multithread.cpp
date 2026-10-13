@@ -3,6 +3,7 @@
 #include "util_bit.hpp"
 #include "util_likely.hpp"
 #include <atomic>
+#include <optional>
 
 namespace dxmt {
 
@@ -10,10 +11,13 @@ void d3d11_device_mutex::lock() {
   if (!protected_)
     return;
   uint32_t tid = dxmt::this_thread::get_id();
+  std::optional<OwnershipWaitDiagnostics::Scope> contention;
   uint32_t expected = 0;
   while(!owner_.compare_exchange_weak(expected, tid, std::memory_order_acquire)) {
     if (unlikely(expected == tid))
       break;
+    if (!contention)
+      contention.emplace(ownership_diagnostics.get(), OwnershipWaitDiagnostics::ContextLock);
     // better to spin here
     while (owner_.load(std::memory_order_relaxed)) {
 #if defined(DXMT_ARCH_X86)

@@ -23,6 +23,7 @@
 #include "thread.hpp"
 #include <atomic>
 #include <cstdint>
+#include <chrono>
 #include <functional>
 
 namespace dxmt {
@@ -48,13 +49,16 @@ public:
     return global_kmt_;
   }
 
+  uint64_t nextReleaseFence() const { return fence_value_ + 1; }
+
   WMT::SharedEvent
   sharedEvent() const {
     return event_;
   }
 
 private:
-  NTSTATUS runOnOwnerThread(const std::function<NTSTATUS()> &call);
+  NTSTATUS runOnOwnerThread(const std::function<NTSTATUS()> &call, const char *operation, uint64_t key,
+                            uint32_t timeout_ms);
 
   D3DKMT_HANDLE local_kmt_;
   D3DKMT_HANDLE global_kmt_;
@@ -73,6 +77,8 @@ private:
   std::atomic<uint32_t> refcount_ = {0u};
   std::atomic_bool owned_ = false;
   uint64_t fence_value_ = 0;
+  std::chrono::steady_clock::time_point ownership_granted_, ownership_ready_;
+  uint64_t ownership_tick_ms_ = 0;
   WMT::Reference<WMT::SharedEvent> event_;
 };
 

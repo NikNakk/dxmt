@@ -30,6 +30,8 @@
 #include "dxmt_resource_initializer.hpp"
 #include "dxmt_ring_bump_allocator.hpp"
 #include "dxmt_statistics.hpp"
+#include "dxmt_ownership_diagnostics.hpp"
+#include <memory>
 #include "log/log.hpp"
 #include "thread.hpp"
 #include "util_cpu_fence.hpp"
@@ -249,6 +251,8 @@ public:
   */
   void CommitCurrentChunk();
 
+  std::shared_ptr<OwnershipWaitDiagnostics> ownership_diagnostics;
+
   uint64_t CurrentFrameSeq() {
     return frame_count + 1;
   }
@@ -265,7 +269,10 @@ public:
     // After present N-th frame (N starts from 1), wait for (N - max_latency)-th frame to finish rendering 
     if (likely(frame_count > max_latency_)) {
       auto t0 = clock::now();
-      frame_latency_fence_.wait(frame_count - max_latency_);
+      {
+        OwnershipWaitDiagnostics::Scope timing(ownership_diagnostics.get(), OwnershipWaitDiagnostics::FrameLatency);
+        frame_latency_fence_.wait(frame_count - max_latency_);
+      }
       auto t1 = clock::now();
       statistics.at(frame_count).present_latency_interval += (t1 - t0);
     }
@@ -278,6 +285,7 @@ public:
 
   void
   WaitCPUFence(uint64_t seq) {
+    OwnershipWaitDiagnostics::Scope timing(ownership_diagnostics.get(), OwnershipWaitDiagnostics::CPUFence);
     cpu_coherent.wait(seq);
   };
 
