@@ -231,9 +231,15 @@ public:
       return S_OK;
     }
 
-    if (riid == __uuidof(ID3D10DeviceChild) ||
-        riid == __uuidof(ID3D10Resource) ||
-        riid == __uuidof(typename tag::D3D10)) {
+    /**
+    Only resources of a device created through D3D10 expose the D3D10 interfaces, as on Windows, where a D3D11
+    resource refuses them. SteamVR's client classifies a submitted DirectX texture as D3D10 when it answers
+    ID3D10Texture2D, and then never measures the application's GPU time.
+    */
+    if ((riid == __uuidof(ID3D10DeviceChild) ||
+         riid == __uuidof(ID3D10Resource) ||
+         riid == __uuidof(typename tag::D3D10)) &&
+        this->m_parent->GetDirectXVersion() == 10) {
       *ppvObject = ref_and_cast<typename tag::D3D10>(&d3d10);
       return S_OK;
     }
