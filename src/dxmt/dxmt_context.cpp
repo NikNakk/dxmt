@@ -1223,6 +1223,12 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         FIXME: Not an elegant implementation, should get rid of it when fence-based synchronization is done
         */
         barrierOnQueue(cmdbuf);
+        /**
+        The barrier only orders this command buffer. Work in earlier command buffers can still be running, and the
+        sampling blit touches none of its resources, so also wait for the previous command buffer's end signal.
+        */
+        if (last_flushed_event_seq_id_)
+          cmdbuf.encodeWaitForEvent(queue_.event, last_flushed_event_seq_id_);
 
         WMTSampleBufferAttachmentInfo sample_buffer_info{};
         sample_buffer_info.sample_buffer = readback->sampleBuffer();
@@ -1262,6 +1268,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
   encoder_count_ = 0;
 
   cmdbuf.encodeSignalEvent(queue_.event, event_seq_id);
+  last_flushed_event_seq_id_ = event_seq_id;
 
   for (size_t i = cpu_buffer_chunks_.size() - 1; i > current_buffer_chunk_; i--) {
     if (++cpu_buffer_chunks_[i].underused_times > kEncodingContextCPUHeapLifetime) {

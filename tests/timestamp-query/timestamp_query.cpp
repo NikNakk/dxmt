@@ -47,8 +47,8 @@ main()
 	printf("work: %s\n", clears ? "8192x8192 render-target clears" : "4096x4096 copies");
 	D3D11_QUERY_DESC dj = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0}, ts = {D3D11_QUERY_TIMESTAMP, 0}, ev = {D3D11_QUERY_EVENT, 0};
 	int failures = 0;
-	struct Case { int before, copies; };
-	for (Case c : {Case{0, 0}, Case{0, 0}, Case{0, 10}, Case{0, 40}, Case{4, 10}, Case{4, 40}, Case{4, 0}}) {
+	struct Case { int before, copies; bool split = false; };
+	for (Case c : {Case{0, 0}, Case{0, 0}, Case{0, 10}, Case{0, 40}, Case{4, 10}, Case{4, 40}, Case{4, 0}, Case{0, 10, true}, Case{0, 40, true}}) {
 		int copies = c.copies;
 		ID3D11Query *qd, *q0, *q1, *qe, *qw;
 		dev->CreateQuery(&dj, &qd);
@@ -81,11 +81,14 @@ main()
 				ctx->CopyResource((i & 1) ? a : b, (i & 1) ? b : a);
 			}
 		}
+		LARGE_INTEGER t0, t1;
+		QueryPerformanceCounter(&t0);
+		// Split: the work goes in its own command buffer, the end query in the next.
+		if (c.split)
+			ctx->Flush();
 		ctx->End(q1);
 		ctx->End(qd);
 		ctx->End(qe);
-		LARGE_INTEGER t0, t1;
-		QueryPerformanceCounter(&t0);
 		ctx->Flush();
 		Wait(ctx, qe, &done);
 		QueryPerformanceCounter(&t1);
@@ -98,8 +101,8 @@ main()
 		double cpu = Ms(t0, t1);
 		bool ok = v1 >= v0 && !d.Disjoint && (copies == 0 ? gpu < 2.0 : gpu > 0.5 * cpu * copies / (copies + c.before) && gpu <= cpu + 1.0);
 		failures += !ok;
-		printf("%s before=%d copies=%2d timestamp delta %.3f ms, flush-to-event %.3f ms, frequency %llu\n", ok ? "ok  " : "FAIL",
-		       c.before, copies, gpu, cpu, (unsigned long long)d.Frequency);
+		printf("%s before=%d copies=%2d%s timestamp delta %.3f ms, flush-to-event %.3f ms, frequency %llu\n", ok ? "ok  " : "FAIL",
+		       c.before, copies, c.split ? " split" : "", gpu, cpu, (unsigned long long)d.Frequency);
 		qd->Release(), q0->Release(), q1->Release(), qe->Release(), qw->Release();
 	}
 	// Deferred contexts (as Source 2 renders): queries recorded around the work
