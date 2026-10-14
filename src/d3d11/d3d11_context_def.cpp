@@ -337,8 +337,15 @@ public:
       ctx_state.current_cmdlist->issued_event_query.push_back(static_cast<MTLD3D11EventQuery *>(pAsync));
       break;
     case D3D11_QUERY_TIMESTAMP: {
+      // Sample where the query sits in the command list, not when the list is executed: queries issued
+      // all at once on execution would bracket none of the list's work.
       promote_flush = true;
+      uint32_t query_id = ctx_state.current_cmdlist->issued_timestamp_query.size();
       ctx_state.current_cmdlist->issued_timestamp_query.push_back(static_cast<MTLD3D11TimestampQuery *>(pAsync));
+      InvalidateCurrentPass(true);
+      EmitOP([query_id](ArgumentEncodingContext &enc) mutable {
+        enc.sampleTimestamp(enc.currentDeferredTimestampQuery(query_id));
+      });
       break;
     }
     case D3D11_QUERY_OCCLUSION:
