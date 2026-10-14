@@ -102,6 +102,58 @@ main()
 		       c.before, copies, gpu, cpu, (unsigned long long)d.Frequency);
 		qd->Release(), q0->Release(), q1->Release(), qe->Release(), qw->Release();
 	}
+	// Deferred contexts (as Source 2 renders): queries recorded around the work
+	// in a command list, executed on the immediate context.
+	ID3D11DeviceContext *def;
+	if (FAILED(dev->CreateDeferredContext(0, &def))) {
+		printf("FAIL deferred context\n");
+		return 1;
+	}
+	for (int copies : {0, 10, 40}) {
+		ID3D11Query *qd, *q0, *q1, *qe, *qw;
+		dev->CreateQuery(&dj, &qd);
+		dev->CreateQuery(&ts, &q0);
+		dev->CreateQuery(&ts, &q1);
+		dev->CreateQuery(&ev, &qe);
+		dev->CreateQuery(&ev, &qw);
+		ctx->End(qw);
+		ctx->Flush();
+		BOOL done;
+		Wait(ctx, qw, &done);
+		def->End(q0);
+		for (int i = 0; i < copies; ++i) {
+			if (clears) {
+				float colour[4] = {0, 0, i * 0.1f, 1};
+				def->ClearRenderTargetView(rtv, colour);
+			} else {
+				def->CopyResource((i & 1) ? a : b, (i & 1) ? b : a);
+			}
+		}
+		def->End(q1);
+		ID3D11CommandList *list;
+		def->FinishCommandList(FALSE, &list);
+		ctx->Begin(qd);
+		ctx->ExecuteCommandList(list, FALSE);
+		ctx->End(qd);
+		ctx->End(qe);
+		LARGE_INTEGER t0, t1;
+		QueryPerformanceCounter(&t0);
+		ctx->Flush();
+		Wait(ctx, qe, &done);
+		QueryPerformanceCounter(&t1);
+		D3D11_QUERY_DATA_TIMESTAMP_DISJOINT d;
+		UINT64 v0, v1;
+		Wait(ctx, qd, &d);
+		Wait(ctx, q0, &v0);
+		Wait(ctx, q1, &v1);
+		double gpu = (double)(v1 - v0) * 1000.0 / (double)d.Frequency;
+		double cpu = Ms(t0, t1);
+		bool ok = v1 >= v0 && !d.Disjoint && (copies == 0 ? gpu < 2.0 : gpu > 0.5 * cpu && gpu <= cpu + 1.0);
+		failures += !ok;
+		printf("%s deferred copies=%2d timestamp delta %.3f ms, flush-to-event %.3f ms\n", ok ? "ok  " : "FAIL",
+		       copies, gpu, cpu);
+		list->Release(), qd->Release(), q0->Release(), q1->Release(), qe->Release(), qw->Release();
+	}
 	printf("%s timestamp queries: failures=%d\n", failures ? "FAIL" : "PASS", failures);
 	return failures ? 1 : 0;
 }

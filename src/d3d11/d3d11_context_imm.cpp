@@ -533,9 +533,13 @@ public:
       End(query.ptr());
     }
 
-    for (const auto &query : cmdlist->issued_timestamp_query) {
-      End(query.ptr());
+    // Each execution samples into new query objects; the replayed list samples them in place.
+    auto timestamp_list = AllocateCommandData<Rc<TimestampQuery>>(cmdlist->issued_timestamp_query.size());
+    for (size_t i = 0; i < cmdlist->issued_timestamp_query.size(); i++) {
+      timestamp_list[i] = cmdlist->issued_timestamp_query[i]->End();
     }
+    if (!cmdlist->issued_timestamp_query.empty())
+      promote_flush = true;
 
     for (const auto &staging : cmdlist->read_staging_resources) {
       staging->useCopySource(seq_id);
@@ -557,10 +561,13 @@ public:
       used_dynamic.texture->updateImmediateName(seq_id, Rc(used_dynamic.allocation), true);
     }
 
-    EmitOP([cmdlist = std::move(cmdlist), query_list = std::move(query_list)](ArgumentEncodingContext &enc) {
+    EmitOP([cmdlist = std::move(cmdlist), query_list = std::move(query_list),
+            timestamp_list = std::move(timestamp_list)](ArgumentEncodingContext &enc) {
       // Finished command list should clean up the encoding context
       enc.pushDeferredVisibilityQueries(query_list.data());
+      enc.pushDeferredTimestampQueries(timestamp_list.data());
       cmdlist->Execute(enc);
+      enc.popDeferredTimestampQueries();
       enc.popDeferredVisibilityQueries();
     });
 
