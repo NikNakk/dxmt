@@ -496,6 +496,9 @@ public:
     std::lock_guard<d3d11_device_mutex> lock(mutex);
     OwnershipWaitDiagnostics::Scope timing(mutex.ownership_diagnostics.get(), OwnershipWaitDiagnostics::Flush);
 
+    if (TimestampWindow())
+      WARN("TS flush queue ", &cmd_queue, " commits ", ctx_state.has_dirty_op_since_last_event || promote_flush,
+           " qpc_us ", QpcUs());
     if (ctx_state.has_dirty_op_since_last_event || promote_flush) {
       InvalidateCurrentPass(true);
       Commit();
@@ -766,8 +769,22 @@ private:
   LogTimestampQuery() {
     uint64_t count = timestamp_queries_++;
     if (count == 0 || count % 4096 == 0)
-      WARN("Timestamp queries: context ", this, " device ", device, " feature level 0x",
+      WARN("Timestamp queries: context ", this, " device ", device, " queue ", &cmd_queue, " feature level 0x",
            str::format(std::hex, (uint32_t)device->GetFeatureLevel()), " queries ", count + 1);
+    if (TimestampWindow())
+      WARN("TS query ", count, " queue ", &cmd_queue, " qpc_us ", QpcUs());
+  }
+  // A window of 100 queries, about 25 s into the process, for per-call logging.
+  bool
+  TimestampWindow() const {
+    return timestamp_queries_ > 20000 && timestamp_queries_ <= 20100;
+  }
+  static uint64_t
+  QpcUs() {
+    LARGE_INTEGER c, f;
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return (uint64_t)((double)c.QuadPart * 1e6 / (double)f.QuadPart);
   }
   uint64_t timestamp_queries_ = 0;
   struct OwnershipWindow {

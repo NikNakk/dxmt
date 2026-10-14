@@ -894,6 +894,33 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
     }
   }
 
+  /* Diagnostic: the encoder sequence of 150 command buffers, 6000 command buffers into the process, to show where
+     timestamp samples (M) fall among render (R), clear (L), compute (C), blit (B), resolve (V), present (P),
+     signal (S), wait (W) and other (.) encoders. */
+  {
+    static std::atomic<uint64_t> flushes = 0;
+    uint64_t n = flushes++;
+    if (n >= 6000 && n < 6150) {
+      std::string seq;
+      for (unsigned k = 0; k < encoder_count; k++) {
+        switch (encoders[k]->type) {
+        case EncoderType::Render: seq += 'R'; break;
+        case EncoderType::Clear: seq += 'L'; break;
+        case EncoderType::Compute: seq += 'C'; break;
+        case EncoderType::Blit: seq += 'B'; break;
+        case EncoderType::Resolve: seq += 'V'; break;
+        case EncoderType::Present: seq += 'P'; break;
+        case EncoderType::SignalEvent: seq += 'S'; break;
+        case EncoderType::WaitForEvent: seq += 'W'; break;
+        case EncoderType::SampleTimestamp: seq += 'M'; break;
+        case EncoderType::Null: break;
+        default: seq += '.'; break;
+        }
+      }
+      WARN("Encoders ", n, " queue ", &queue_, " seq ", seqId, ": ", seq);
+    }
+  }
+
   QueryReadbacks readbacks{};
 
   if (auto count = vro_state_.reset()) {
