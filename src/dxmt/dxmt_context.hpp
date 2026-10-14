@@ -936,6 +936,8 @@ private:
   TimestampQueryState timestamp_state_;
   std::vector<Rc<VisibilityResultQuery> *> deferred_visibility_query_stack_;
   std::vector<Rc<TimestampQuery> *> deferred_timestamp_query_stack_;
+  // queue_.event value signalled at the end of the last command buffer encoded here.
+  uint64_t last_flushed_event_seq_id_ = 0;
 
   WMT::Reference<WMT::Event> barrier_event_;
   uint64_t barrier_index_ = 0;
