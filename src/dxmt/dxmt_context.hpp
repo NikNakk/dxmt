@@ -797,6 +797,21 @@ public:
     assert(!deferred_visibility_query_stack_.empty());
     return deferred_visibility_query_stack_.back()[query_id];
   }
+  // Timestamp queries of the command list being replayed, made for this execution.
+  void
+  pushDeferredTimestampQueries(Rc<TimestampQuery> *list) {
+    deferred_timestamp_query_stack_.push_back(list);
+  }
+  void
+  popDeferredTimestampQueries() {
+    assert(!deferred_timestamp_query_stack_.empty());
+    deferred_timestamp_query_stack_.pop_back();
+  }
+  Rc<TimestampQuery>
+  currentDeferredTimestampQuery(uint32_t query_id) {
+    assert(!deferred_timestamp_query_stack_.empty());
+    return deferred_timestamp_query_stack_.back()[query_id];
+  }
 
   void sampleTimestamp(Rc<TimestampQuery> &&query);
 
@@ -920,6 +935,7 @@ private:
   Flags<FeatureCompatibility> compatibility_flag_;
   TimestampQueryState timestamp_state_;
   std::vector<Rc<VisibilityResultQuery> *> deferred_visibility_query_stack_;
+  std::vector<Rc<TimestampQuery> *> deferred_timestamp_query_stack_;
 
   WMT::Reference<WMT::Event> barrier_event_;
   uint64_t barrier_index_ = 0;
