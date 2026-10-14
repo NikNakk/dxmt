@@ -374,7 +374,7 @@ public:
       break;
     }
     case D3D11_QUERY_TIMESTAMP: {
-      LogTimestampQuery();
+      LogTimestampQuery(pAsync);
       if (auto query = static_cast<MTLD3D11TimestampQuery *>(pAsync)->End()) {
         InvalidateCurrentPass(true);
         EmitOP([query = Rc(query)](ArgumentEncodingContext &enc) mutable {
@@ -477,6 +477,15 @@ public:
       ERR("Unknown query type ", desc.Query);
       return E_FAIL;
     }
+    if (TimestampWindow() && (desc.Query == D3D11_QUERY_TIMESTAMP || desc.Query == D3D11_QUERY_TIMESTAMP_DISJOINT)) {
+      uint64_t value = 0;
+      if (hr == S_OK && pData && desc.Query == D3D11_QUERY_TIMESTAMP)
+        value = *static_cast<uint64_t *>(pData);
+      if (hr == S_OK && pData && desc.Query == D3D11_QUERY_TIMESTAMP_DISJOINT)
+        value = static_cast<D3D11_QUERY_DATA_TIMESTAMP_DISJOINT *>(pData)->Disjoint;
+      WARN("TS getdata ", desc.Query == D3D11_QUERY_TIMESTAMP ? "timestamp" : "disjoint", " query ", pAsync,
+           " flags ", GetDataFlags, " size ", DataSize, " hr ", (int)hr, " value ", value, " qpc_us ", QpcUs());
+    }
     if (hr == S_FALSE && (GetDataFlags & D3D11_ASYNC_GETDATA_DONOTFLUSH) == 0) {
       cmd_queue.CurrentFrameStatistics().event_stall++;
       Flush();
@@ -540,7 +549,7 @@ public:
     // Each execution samples into new query objects; the replayed list samples them in place.
     auto timestamp_list = AllocateCommandData<Rc<TimestampQuery>>(cmdlist->issued_timestamp_query.size());
     for (size_t i = 0; i < cmdlist->issued_timestamp_query.size(); i++) {
-      LogTimestampQuery();
+      LogTimestampQuery(cmdlist->issued_timestamp_query[i].ptr());
       timestamp_list[i] = cmdlist->issued_timestamp_query[i]->End();
     }
     if (!cmdlist->issued_timestamp_query.empty())
@@ -766,13 +775,13 @@ private:
   }
   /* Diagnostic: which devices issue timestamp queries, and how often. */
   void
-  LogTimestampQuery() {
+  LogTimestampQuery(const void *query) {
     uint64_t count = timestamp_queries_++;
     if (count == 0 || count % 4096 == 0)
       WARN("Timestamp queries: context ", this, " device ", device, " queue ", &cmd_queue, " feature level 0x",
            str::format(std::hex, (uint32_t)device->GetFeatureLevel()), " queries ", count + 1);
     if (TimestampWindow())
-      WARN("TS query ", count, " queue ", &cmd_queue, " qpc_us ", QpcUs());
+      WARN("TS query ", count, " queue ", &cmd_queue, " query ", query, " qpc_us ", QpcUs());
   }
   // A window of 100 queries, about 25 s into the process, for per-call logging.
   bool
