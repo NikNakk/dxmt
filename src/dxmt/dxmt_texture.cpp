@@ -19,6 +19,9 @@
 #include "dxmt_texture.hpp"
 #include "dxmt_residency.hpp"
 #include "wsi_platform.hpp"
+#include "dxmt_format.hpp"
+#include "log/log.hpp"
+#include "util_env.hpp"
 #include <atomic>
 #include <cassert>
 
@@ -127,6 +130,14 @@ Texture::createView(TextureViewDescriptor const &descriptor) {
     if (viewDescriptors_[i].arraySize != descriptor.arraySize)
       continue;
     return TextureViewKey(descriptor, i, info_.mipmap_level_count);
+  }
+  // DXMT_LOG_TEXTURE_USAGE=1: log views that reinterpret a large texture's data.
+  static const bool log_views = env::getEnvVar("DXMT_LOG_TEXTURE_USAGE") == "1";
+  if (log_views && info_.width * info_.height >= 1000000 &&
+      ViewNeedsPixelFormatView(info_.pixel_format, descriptor.format)) {
+    WARN("texture view reinterprets: ", info_.width, "x", info_.height, " samples=", info_.sample_count,
+         " storage_format=", (uint32_t)info_.pixel_format, " view_format=", (uint32_t)descriptor.format,
+         " has_pixel_format_view=", (info_.usage & WMTTextureUsagePixelFormatView) ? 1 : 0);
   }
   viewDescriptors_.push_back(descriptor);
   version_ = version_ + 1;

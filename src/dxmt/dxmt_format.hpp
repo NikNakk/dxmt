@@ -29,6 +29,15 @@ public:
 WMTPixelFormat Forget_sRGB(WMTPixelFormat format);
 WMTPixelFormat Recall_sRGB(WMTPixelFormat format);
 
+/* Whether viewing a texture stored as `storage` in `view` format reinterprets
+ * its data, so that Metal needs MTLTextureUsagePixelFormatView. Metal allows
+ * the same format and sRGB <-> linear variants without it (checked with the
+ * validation layer on Apple M5, macOS 26). */
+inline bool
+ViewNeedsPixelFormatView(WMTPixelFormat storage, WMTPixelFormat view) {
+  return Forget_sRGB(storage) != Forget_sRGB(view);
+}
+
 inline bool
 Is_sRGBVariant(WMTPixelFormat format) {
   return Forget_sRGB(format) != format;
