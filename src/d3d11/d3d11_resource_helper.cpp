@@ -4,6 +4,7 @@
 #include "d3d11_resource.hpp"
 #include "d3d11_1.h"
 #include "util_math.hpp"
+#include "util_env.hpp"
 
 namespace dxmt {
 
@@ -369,6 +370,15 @@ CreateMTLTextureDescriptorInternal(
   if (metal_format.Flag & MTL_DXGI_FORMAT_TYPELESS) {
     // well this is necessary for passing validation layer
     metal_usage |= WMTTextureUsagePixelFormatView;
+    // Measurement only, not correct: DXMT_PIXEL_FORMAT_VIEW_EXPERIMENT=strip leaves the
+    // usage off colour textures that need no CPU access, so Metal can compress them.
+    // Views in another format (other than an sRGB swap) are then invalid.
+    static const bool strip = env::getEnvVar("DXMT_PIXEL_FORMAT_VIEW_EXPERIMENT") == "strip";
+    if (strip && !CPUAccessFlags && !(MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX |
+                                                   D3D11_RESOURCE_MISC_SHARED_NTHANDLE)) &&
+        !(BindFlags & D3D11_BIND_DEPTH_STENCIL) &&
+        !(metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)))
+      metal_usage = (WMTTextureUsage)(metal_usage & ~WMTTextureUsagePixelFormatView);
   }
 
   if (metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)) {
@@ -461,6 +471,17 @@ CreateMTLTextureDescriptorInternal(
   pDescOut->width = Width;
   pDescOut->height = Height;
   pDescOut->depth = Depth;
+
+  // DXMT_LOG_TEXTURE_USAGE=1: log large GPU-written textures with the Metal usage
+  // they get. PixelFormatView or ShaderWrite usage can stop Metal compressing them.
+  static const bool log_usage = env::getEnvVar("DXMT_LOG_TEXTURE_USAGE") == "1";
+  if (log_usage && Width * Height >= 1000000 &&
+      (BindFlags & (D3D11_BIND_RENDER_TARGET | D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS))) {
+    WARN("texture usage: ", Width, "x", Height, " samples=", SampleCount, " array=", ArraySize,
+         " dxgi_format=", Format, " typeless=", (metal_format.Flag & MTL_DXGI_FORMAT_TYPELESS) ? 1 : 0,
+         " bind=0x", std::hex, BindFlags, " metal_usage=0x", (uint32_t)pDescOut->usage, std::dec,
+         " pixel_format=", (uint32_t)pDescOut->pixel_format);
+  }
 
   return S_OK;
 };
