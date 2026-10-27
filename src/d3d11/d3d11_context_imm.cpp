@@ -522,6 +522,7 @@ public:
     auto seq_id = ctx_state.cmd_queue.CurrentSeqId();
 
     promote_flush = cmdlist->promote_flush;
+    work_since_commit_ += cmdlist->work;
 
     auto query_list = AllocateCommandData<Rc<VisibilityResultQuery>>(cmdlist->visibility_query_count);
     for (const auto &[query, index] : cmdlist->issued_visibility_query) {
@@ -571,6 +572,13 @@ public:
       enc.popDeferredVisibilityQueries();
     });
 
+    // A large list (most of a frame, for engines that record on worker threads) is committed
+    // at once, so its encoding and GPU work start before the rest of the frame is recorded.
+    if (auto_commit_threshold_ && work_since_commit_ >= auto_commit_threshold_) {
+      InvalidateCurrentPass(true);
+      Commit();
+    }
+
     if (RestoreContextState)
       RestoreEncodingContextState();
     else
@@ -602,6 +610,7 @@ public:
   void
   Commit() override {
     promote_flush = false;
+    work_since_commit_ = 0;
     D3D11_ASSERT(cmdbuf_state == CommandBufferState::Idle);
     ctx_state.cmd_queue.CommitCurrentChunk();
     ctx_state.has_dirty_op_since_last_event = false;

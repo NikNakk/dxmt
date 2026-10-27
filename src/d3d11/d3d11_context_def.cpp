@@ -407,6 +407,8 @@ public:
 
     ctx_state.current_cmdlist->promote_flush = promote_flush;
     promote_flush = false;
+    ctx_state.current_cmdlist->work = work_since_commit_;
+    work_since_commit_ = 0;
 
     for (const auto &[_, building_query] : ctx_state.building_visibility_queries) {
       End(building_query.first.ptr());

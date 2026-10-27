@@ -30,6 +30,8 @@
 #include "d3d11_context_state.hpp"
 #include "d3d11_device.hpp"
 #include "d3d11_pipeline.hpp"
+#include "util_env.hpp"
+#include <cstdlib>
 #include "d3d11_query.hpp"
 #include "dxmt_buffer.hpp"
 #include "dxmt_context.hpp"
@@ -4269,6 +4271,13 @@ public:
 #pragma region CommandEncoder Maintain State
 
   bool promote_flush = false;
+  // Draws and dispatches recorded since the immediate context last committed.
+  uint32_t work_since_commit_ = 0;
+  // DXMT_AUTO_COMMIT_WORK: commit at the next pass boundary after this many (0: never).
+  const uint32_t auto_commit_threshold_ = [] {
+    auto value = env::getEnvVar("DXMT_AUTO_COMMIT_WORK");
+    return value.empty() ? 0u : (uint32_t)std::strtoul(value.c_str(), nullptr, 10);
+  }();
 
   /**
   Render pass can be invalidated by reasons:
@@ -4316,6 +4325,12 @@ public:
     }
 
     cmdbuf_state = CommandBufferState::Idle;
+    // Without a desktop Present (an OpenXR or OpenVR game), nothing else commits the immediate
+    // context until the frame ends, so the GPU would start the frame's work only then. Commit at
+    // a pass boundary once enough work has been recorded, as if the app had called Flush().
+    if (auto_commit_threshold_ && work_since_commit_ >= auto_commit_threshold_ &&
+        GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE)
+      promote_flush = true;
     if (promote_flush && !defer_commit) {
       Commit();
       return true;
@@ -4944,6 +4959,7 @@ public:
       UploadShaderStageResourceBinding<PipelineStage::Vertex, PipelineKind::Ordinary>();
       UploadShaderStageResourceBinding<PipelineStage::Pixel, PipelineKind::Ordinary>();
     }
+    work_since_commit_++;
     return status;
   }
 
@@ -4993,6 +5009,7 @@ public:
       return false;
     }
     UploadShaderStageResourceBinding<PipelineStage::Compute, PipelineKind::Ordinary>();
+    work_since_commit_++;
     return true;
   }
 
@@ -5510,6 +5527,9 @@ public:
 #pragma endregion
 
   bool promote_flush = false;
+  // Draws and dispatches recorded in this list, counted toward the immediate context's
+  // DXMT_AUTO_COMMIT_WORK when it is executed.
+  uint32_t work = 0;
 
   std::vector<used_dynamic_buffer> used_dynamic_buffers;
   std::vector<used_dynamic_lineartexture> used_dynamic_lineartextures;
