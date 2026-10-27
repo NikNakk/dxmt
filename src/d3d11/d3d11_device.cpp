@@ -43,7 +43,8 @@ const GUID kGpaUUID = {0xccffef16,
                        {0xbc, 0xe3, 0xcd, 0x95, 0x33, 0x69, 0xa3, 0x9a}};
 
 class MTLD3D11DeviceImpl final : public MTLD3D11Device, public IMTLD3D11DeviceExt, public IMTLSwapChainFactory,
-                               public IDXMTNativeDevice, public IDXMTNativeDevice2, public IDXMTNativeDevice3 {
+                               public IDXMTNativeDevice, public IDXMTNativeDevice2, public IDXMTNativeDevice3,
+                               public IDXMTNativeDevice4 {
 friend class MTLD3D11DXGIDevice;
 public:
   MTLD3D11DeviceImpl(
@@ -102,6 +103,18 @@ public:
 
   HRESULT STDMETHODCALLTYPE CreateSharedTextureHandle(ID3D11Texture2D *texture, HANDLE *handle) override {
     return ExportSharedTexture(this, texture, handle);
+  }
+
+  // The same sequence as MTLD3D11SwapChain::Present, without the present.
+  HRESULT STDMETHODCALLTYPE EndFrame() override {
+    std::unique_lock<d3d11_device_mutex> lock(mutex);
+    context_->PrepareFlush();
+    auto &queue = device_.queue();
+    queue.CurrentChunk()->signal_frame_latency_fence_ = queue.CurrentFrameSeq();
+    context_->Commit();
+    lock.unlock(); // PresentBoundary() may stall this thread on the frame latency fence
+    queue.PresentBoundary();
+    return S_OK;
   }
 
   bool IsTraced() override { return is_traced_; }
@@ -1229,6 +1242,10 @@ public:
     }
     if (riid == DXMT_IID_NATIVE_DEVICE3) {
       *ppvObject = ref_and_cast<IDXMTNativeDevice3>(&d3d11_device_);
+      return S_OK;
+    }
+    if (riid == DXMT_IID_NATIVE_DEVICE4) {
+      *ppvObject = ref_and_cast<IDXMTNativeDevice4>(&d3d11_device_);
       return S_OK;
     }
 

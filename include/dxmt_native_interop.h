@@ -56,6 +56,20 @@ static const GUID DXMT_IID_NATIVE_DEVICE3 = {
 struct IDXMTNativeDevice3 : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE CreateSharedTextureHandle(ID3D11Texture2D *texture, HANDLE *handle) = 0;
 };
+/* Optional, in-process: end a frame for an application that never calls
+ * IDXGISwapChain::Present, such as an OpenXR application at xrEndFrame.
+ * Does what Present does apart from presenting: commits the immediate
+ * context's work, starts a new DXMT frame (per-frame statistics, frame
+ * captures with DXMT_CAPTURE_FRAME) and applies the maximum frame latency,
+ * which can block the caller until an earlier frame's GPU work completes.
+ * Call it from the thread that owns the immediate context, at most once per
+ * application frame, and not from an application that also presents. */
+static const GUID DXMT_IID_NATIVE_DEVICE4 = {
+    0x8e2f4c61, 0x0d7b, 0x4b39,
+    {0xa1, 0x5c, 0x26, 0x93, 0xe7, 0x4f, 0x08, 0xd2}};
+struct IDXMTNativeDevice4 : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE EndFrame() = 0;
+};
 struct IDXMTNativeDevice : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE ImportSharedTexture(
       const char *bootstrap_name, const D3D11_TEXTURE2D_DESC *desc,

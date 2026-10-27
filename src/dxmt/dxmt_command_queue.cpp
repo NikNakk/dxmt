@@ -62,6 +62,13 @@ CommandQueue::CommandQueue(WMT::Device device) :
   };
   event = device.newSharedEvent();
 
+  std::string count = env::getEnvVar("DXMT_CAPTURE_FRAME_COUNT");
+  if (!count.empty()) {
+    try {
+      capture_state.setFramesPerCapture(std::stoull(count));
+    } catch (const std::invalid_argument &) {
+    }
+  }
   std::string env = env::getEnvVar("DXMT_CAPTURE_FRAME");
 
   if (!env.empty()) {
