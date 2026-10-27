@@ -17,6 +17,10 @@
  */
 
 #include "dxmt_context.hpp"
+#include "util_env.hpp"
+#include <string>
+#include <cstdio>
+#include <algorithm>
 #include "Metal.hpp"
 #include "dxmt_command_queue.hpp"
 #include "dxmt_deptrack.hpp"
@@ -860,6 +864,148 @@ ArgumentEncodingContext::$$setEncodingContext(uint64_t seq_id, uint64_t frame_id
 
 constexpr unsigned kEncoderOptimizerThreshold = 64;
 
+namespace {
+
+// DXMT_ENCODER_LABELS=1: name each render and compute encoder by what it does, so a Metal
+// System Trace can tell passes apart (the default labels are positional).
+bool
+encoderLabelsEnabled() {
+  static const bool enabled = env::getEnvVar("DXMT_ENCODER_LABELS") == "1";
+  return enabled;
+}
+
+char
+loadCode(WMTLoadAction a) {
+  return a == WMTLoadActionClear ? 'C' : a == WMTLoadActionLoad ? 'L' : 'x';
+}
+
+const char *
+storeCode(WMTStoreAction a) {
+  switch (a) {
+  case WMTStoreActionStore:
+    return "S";
+  case WMTStoreActionMultisampleResolve:
+    return "R";
+  case WMTStoreActionStoreAndMultisampleResolve:
+    return "SR";
+  default:
+    return "x";
+  }
+}
+
+template <typename Head>
+void
+countCommands(const Head *head, uint16_t first, uint16_t last, unsigned &matched, unsigned &total) {
+  for (auto cmd = reinterpret_cast<const wmtcmd_base *>(head); cmd;
+       cmd = reinterpret_cast<const wmtcmd_base *>(const_cast<WMTMemoryPointer &>(cmd->next).get())) {
+    total++;
+    if (cmd->type >= first && cmd->type <= last)
+      matched++;
+  }
+}
+
+// "R 1400x1428x2 s2 c0=115:L/S c1=70:C/x d=260:L/S draws=12": size x array length, raster
+// sample count, then per attachment the Metal pixel format and load/store actions
+// (L load, C clear, x don't care; S store, R resolve, SR store and resolve).
+std::string
+renderLabel(RenderEncoderData *data) {
+  char buf[512];
+  int n = snprintf(
+      buf, sizeof(buf), "R %ux%ux%u s%u", data->render_target_width, data->render_target_height,
+      (unsigned)data->render_target_array_length, (unsigned)data->tile_barrier_pso_key.raster_sample_count
+  );
+  auto attachment = [&](const char *name, WMT::Texture tex, WMTLoadAction load, WMTStoreAction store) {
+    if (!tex || n >= (int)sizeof(buf))
+      return;
+    n += snprintf(
+        buf + n, sizeof(buf) - n, " %s=%u:%c/%s", name, (unsigned)tex.pixelFormat(), loadCode(load), storeCode(store)
+    );
+    if (n < (int)sizeof(buf) && (tex.width() != data->render_target_width || tex.height() != data->render_target_height))
+      n += snprintf(buf + n, sizeof(buf) - n, "@%llux%llu", (unsigned long long)tex.width(),
+                    (unsigned long long)tex.height());
+  };
+  for (unsigned i = 0; i < std::size(data->colors); i++) {
+    auto &c = data->colors[i];
+    if (!c.attachment)
+      continue;
+    char name[4] = {'c', char('0' + i), 0, 0};
+    attachment(name, c.attachment.texture(), c.load_action, c.store_action);
+  }
+  if (data->depth.attachment)
+    attachment("d", data->depth.attachment.texture(), data->depth.load_action, data->depth.store_action);
+  if (data->stencil.attachment && !data->depth.attachment)
+    attachment("st", data->stencil.attachment.texture(), data->stencil.load_action, data->stencil.store_action);
+  else if (data->stencil.attachment && n < (int)sizeof(buf))
+    n += snprintf(buf + n, sizeof(buf) - n, " st=%c/%s", loadCode(data->stencil.load_action),
+                  storeCode(data->stencil.store_action));
+  // Draw kinds: d direct, i indexed, x indirect, g geometry-shader emulation, t tessellation
+  // emulation; kv thousands of vertices (index count x instances) for direct and indexed draws.
+  unsigned direct = 0, indexed = 0, indirect = 0, geometry = 0, tess = 0, mesh = 0, max_instances = 0;
+  uint64_t vertices = 0;
+  for (auto cmd = reinterpret_cast<const wmtcmd_base *>(&data->cmd_head); cmd;
+       cmd = reinterpret_cast<const wmtcmd_base *>(const_cast<WMTMemoryPointer &>(cmd->next).get())) {
+    switch (cmd->type) {
+    case WMTRenderCommandDraw: {
+      auto d = reinterpret_cast<const wmtcmd_render_draw *>(cmd);
+      direct++;
+      vertices += d->vertex_count * d->instance_count;
+      max_instances = std::max(max_instances, d->instance_count);
+      break;
+    }
+    case WMTRenderCommandDrawIndexed: {
+      auto d = reinterpret_cast<const wmtcmd_render_draw_indexed *>(cmd);
+      indexed++;
+      vertices += d->index_count * d->instance_count;
+      max_instances = std::max(max_instances, d->instance_count);
+      break;
+    }
+    case WMTRenderCommandDrawIndirect:
+    case WMTRenderCommandDrawIndexedIndirect:
+      indirect++;
+      break;
+    case WMTRenderCommandDrawMeshThreadgroups:
+    case WMTRenderCommandDrawMeshThreadgroupsIndirect:
+      mesh++;
+      break;
+    case WMTRenderCommandDXMTGeometryDraw:
+    case WMTRenderCommandDXMTGeometryDrawIndexed:
+    case WMTRenderCommandDXMTGeometryDrawIndirect:
+    case WMTRenderCommandDXMTGeometryDrawIndexedIndirect:
+      geometry++;
+      break;
+    case WMTRenderCommandDXMTTessellationMeshDraw:
+    case WMTRenderCommandDXMTTessellationMeshDrawIndexed:
+    case WMTRenderCommandDXMTTessellationMeshDrawIndirect:
+    case WMTRenderCommandDXMTTessellationMeshDrawIndexedIndirect:
+      tess++;
+      break;
+    default:
+      break;
+    }
+  }
+  if (n < (int)sizeof(buf))
+    n += snprintf(buf + n, sizeof(buf) - n, " draws=%u d%u i%u x%u g%u t%u m%u kv=%llu inst<=%u",
+                  direct + indexed + indirect + geometry + tess + mesh, direct, indexed, indirect, geometry, tess,
+                  mesh, (unsigned long long)(vertices / 1000), max_instances);
+  if (n < (int)sizeof(buf) && (data->use_geometry || data->use_tessellation || data->gs_arg_marshal_tasks.size() ||
+                               data->ts_arg_marshal_tasks.size()))
+    snprintf(buf + n, sizeof(buf) - n, " emu%s%s", data->use_geometry ? "-gs" : "", data->use_tessellation ? "-ts" : "");
+  return buf;
+}
+
+std::string
+computeLabel(ComputeEncoderData *data) {
+  unsigned dispatches = 0, total = 0;
+  countCommands(&data->cmd_head, WMTComputeCommandDispatch, WMTComputeCommandDispatchIndirect, dispatches, total);
+  for (auto cmd = reinterpret_cast<const wmtcmd_base *>(&data->cmd_head); cmd;
+       cmd = reinterpret_cast<const wmtcmd_base *>(const_cast<WMTMemoryPointer &>(cmd->next).get()))
+    if (cmd->type == WMTComputeCommandDispatchThreads)
+      dispatches++;
+  return "C dispatches=" + std::to_string(dispatches);
+}
+
+} // namespace
+
 QueryReadbacks
 ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId, uint64_t event_seq_id) {
   assert(!encoder_current);
@@ -963,6 +1109,8 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
       }
       auto gpu_buffer_ = data->allocated_argbuf;
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
+      if (encoderLabelsEnabled())
+        encoder.setLabel(WMT::String::string(renderLabel(data).c_str(), WMTUTF8StringEncoding));
       data->fence_wait.forEach(
           data->fence_wait_vertex, // if a fence is waited pre-raster, no need to wait again at fragment
           [&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStagePreRaster); },
@@ -1058,6 +1206,8 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
     case EncoderType::Compute: {
       auto data = static_cast<ComputeEncoderData *>(current);
       auto encoder = cmdbuf.computeCommandEncoder(true);
+      if (encoderLabelsEnabled())
+        encoder.setLabel(WMT::String::string(computeLabel(data).c_str(), WMTUTF8StringEncoding));
       data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id]); });
       struct wmtcmd_compute_setbuffer setcmd;
       setcmd.type = WMTComputeCommandSetBuffer;
@@ -1133,7 +1283,16 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         }
         info.render_target_array_length = data->array_length;
         auto encoder = cmdbuf.renderCommandEncoder(info);
-        encoder.setLabel(WMT::String::string("ClearPass", WMTUTF8StringEncoding));
+        if (encoderLabelsEnabled()) {
+          auto tex = data->attachment.texture();
+          char label[96];
+          snprintf(label, sizeof(label), "ClearPass %s %llux%llux%u fmt=%u", data->clear_dsv ? "depth" : "color",
+                   (unsigned long long)tex.width(), (unsigned long long)tex.height(), data->array_length,
+                   (unsigned)tex.pixelFormat());
+          encoder.setLabel(WMT::String::string(label, WMTUTF8StringEncoding));
+        } else {
+          encoder.setLabel(WMT::String::string("ClearPass", WMTUTF8StringEncoding));
+        }
         data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
         data->fence_update.forEach([&](auto id) { encoder.updateFence(fence_pool_[id], WMTRenderStageFragment); });
         encoder.endEncoding();
