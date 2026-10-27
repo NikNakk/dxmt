@@ -603,6 +603,17 @@ class MTLD3D11ContextExt;
 
 enum class DrawCallStatus { Invalid, Ordinary, Tessellation, Geometry };
 
+// On-demand PixelFormatView: a uint clear of a texture view creates a uint view of it on the
+// encode thread, so queue the texture's upgrade now, before the clear is recorded.
+inline void
+RequestUintViewUpgrade(Texture *texture, WMTPixelFormat view_format) {
+  auto uint_format = MTLGetUnsignedIntegerFormat(view_format);
+  if (view_format == WMTPixelFormatRG11B10Float || view_format == WMTPixelFormatRGB9E5Float)
+    uint_format = WMTPixelFormatR32Uint;
+  if (uint_format != WMTPixelFormatInvalid && uint_format != view_format)
+    texture->requestPixelFormatViewUpgradeFor(uint_format);
+}
+
 template <typename ContextInternalState> class MTLD3D11DeviceContextImplBase : public MTLD3D11DeviceContextBase {
   template<typename ContextInternalState_>
   friend class MTLD3D11ContextExt;
@@ -701,7 +712,8 @@ public:
           }
         }
       });
-    else
+    else {
+      RequestUintViewUpgrade(pUAV->texture().ptr(), pUAV->texture()->pixelFormat(pUAV->viewId()));
       EmitOP([=, texture = pUAV->texture(), viewId = pUAV->viewId(),
             value = std::array<uint32_t, 4>({Values[0], Values[1], Values[2], Values[3]}),
             dimension = desc.ViewDimension](ArgumentEncodingContext &enc) mutable {
@@ -735,6 +747,7 @@ public:
           break;
         }
       });
+    }
     InvalidateCurrentPass();
   }
 
@@ -903,6 +916,7 @@ public:
       D3D11_UNORDERED_ACCESS_VIEW_DESC1 desc;
       uav->GetDesc1(&desc);
       if (desc.ViewDimension != D3D11_UAV_DIMENSION_BUFFER) {
+        RequestUintViewUpgrade(uav->texture().ptr(), uav->texture()->pixelFormat(uav->viewId()));
         EmitST([=, texture = uav->texture(),
                 view = uav->viewId()](ArgumentEncodingContext &enc) {
           enc.clear_uav_cmd.begin(color, texture.ptr(), view);
@@ -999,6 +1013,9 @@ public:
       return;
     }
     InvalidateCurrentPass();
+    // the resolve views both textures in `Format` on the encode thread
+    static_cast<D3D11ResourceCommon *>(pSrcResource)->texture()->requestPixelFormatViewUpgradeFor(format_desc.PixelFormat);
+    static_cast<D3D11ResourceCommon *>(pDstResource)->texture()->requestPixelFormatViewUpgradeFor(format_desc.PixelFormat);
     EmitOP([src = static_cast<D3D11ResourceCommon *>(pSrcResource)->texture(),
             dst = static_cast<D3D11ResourceCommon *>(pDstResource)->texture(),
             dst_level = DstSubresource % Dst.Texture2DDesc.MipLevels,

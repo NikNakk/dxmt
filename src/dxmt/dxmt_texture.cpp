@@ -51,6 +51,14 @@ TextureView::TextureView(TextureAllocation *allocation, unsigned index, TextureV
     allocation(allocation),
     key(descriptor, index, allocation->descriptor->miplevelCount()) {
   auto parent = allocation->texture();
+  // An allocation made before an on-demand PixelFormatView upgrade cannot have views that
+  // reinterpret its data (Metal rejects them). Commands never use them on that allocation, since
+  // the upgrade runs before any command that uses such a view; give it a storage-format view.
+  if (!(allocation->usage & WMTTextureUsagePixelFormatView) &&
+      ViewNeedsPixelFormatView(
+          ORIGINAL_FORMAT(allocation->descriptor->pixelFormat()), ORIGINAL_FORMAT(descriptor.format)
+      ))
+    descriptor.format = ORIGINAL_FORMAT(allocation->descriptor->pixelFormat());
   texture = parent.newTextureView(
       descriptor.format, descriptor.type, descriptor.firstMiplevel, descriptor.miplevelCount,
       descriptor.firstArraySlice, descriptor.arraySize,
@@ -63,6 +71,7 @@ TextureAllocation::TextureAllocation(
     unsigned bytes_per_row, Flags<TextureAllocationFlag> flags
 ) :
     descriptor(descriptor),
+    usage(info.usage),
     mappedMemory(mapped_buffer),
     buffer_(std::move(buffer)),
     flags_(flags) {
@@ -81,6 +90,7 @@ TextureAllocation::TextureAllocation(
     Flags<TextureAllocationFlag> flags
 ) :
     descriptor(descriptor),
+    usage(textureDescriptor.usage),
     obj_(std::move(texture)),
     flags_(flags) {
   mappedMemory = nullptr;
@@ -141,7 +151,37 @@ Texture::createView(TextureViewDescriptor const &descriptor) {
   }
   viewDescriptors_.push_back(descriptor);
   version_ = version_ + 1;
+  bool needs_upgrade = pfv_upgrade_queue_ && !(info_.usage & WMTTextureUsagePixelFormatView) &&
+                       ViewNeedsPixelFormatView(ORIGINAL_FORMAT(info_.pixel_format), ORIGINAL_FORMAT(descriptor.format));
+  lock.unlock();
+  if (needs_upgrade && !pfv_upgrade_requested_.exchange(true))
+    RequestPixelFormatViewUpgrade(pfv_upgrade_queue_, this);
   return TextureViewKey(descriptor, i, info_.mipmap_level_count);
+}
+
+bool
+Texture::needsPixelFormatViewUpgrade(WMTPixelFormat format) {
+  std::shared_lock<dxmt::shared_mutex> lock(mutex_);
+  return pfv_upgrade_queue_ && !(info_.usage & WMTTextureUsagePixelFormatView) &&
+         ViewNeedsPixelFormatView(ORIGINAL_FORMAT(info_.pixel_format), ORIGINAL_FORMAT(format));
+}
+
+bool
+Texture::requestPixelFormatViewUpgradeFor(WMTPixelFormat format) {
+  if (!needsPixelFormatViewUpgrade(format))
+    return pfv_upgrade_requested_.load();
+  if (!pfv_upgrade_requested_.exchange(true))
+    RequestPixelFormatViewUpgrade(pfv_upgrade_queue_, this);
+  return true;
+}
+
+bool
+Texture::addPixelFormatViewUsage() {
+  std::unique_lock<dxmt::shared_mutex> lock(mutex_);
+  if (info_.usage & WMTTextureUsagePixelFormatView)
+    return false;
+  info_.usage = (WMTTextureUsage)(info_.usage | WMTTextureUsagePixelFormatView);
+  return true;
 }
 
 Texture::Texture(const WMTTextureInfo &descriptor, WMT::Device device) :

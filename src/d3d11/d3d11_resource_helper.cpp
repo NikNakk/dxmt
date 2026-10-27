@@ -370,15 +370,7 @@ CreateMTLTextureDescriptorInternal(
   if (metal_format.Flag & MTL_DXGI_FORMAT_TYPELESS) {
     // well this is necessary for passing validation layer
     metal_usage |= WMTTextureUsagePixelFormatView;
-    // Measurement only, not correct: DXMT_PIXEL_FORMAT_VIEW_EXPERIMENT=strip leaves the
-    // usage off colour textures that need no CPU access, so Metal can compress them.
-    // Views in another format (other than an sRGB swap) are then invalid.
-    static const bool strip = env::getEnvVar("DXMT_PIXEL_FORMAT_VIEW_EXPERIMENT") == "strip";
-    if (strip && !CPUAccessFlags && !(MiscFlags & (D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX |
-                                                   D3D11_RESOURCE_MISC_SHARED_NTHANDLE)) &&
-        !(BindFlags & D3D11_BIND_DEPTH_STENCIL) &&
-        !(metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)))
-      metal_usage = (WMTTextureUsage)(metal_usage & ~WMTTextureUsagePixelFormatView);
+    // Device textures may drop it again and add it on demand (CreateDeviceTextureInternal).
   }
 
   if (metal_format.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)) {
