@@ -84,6 +84,10 @@ struct TextureViewKey {
 
 class Texture;
 class TextureAllocation;
+class CommandQueue;
+
+// queue a texture for an on-demand PixelFormatView upgrade (dxmt_command_queue.cpp)
+void RequestPixelFormatViewUpgrade(CommandQueue *queue, Texture *texture);
 
 class TextureView {
 public:
@@ -146,6 +150,8 @@ public:
   }
 
   Texture *descriptor;
+  // the Metal usage this allocation was created with
+  WMTTextureUsage usage;
   void *mappedMemory;
   uint64_t gpuResourceID;
   mach_port_t machPort;
@@ -290,6 +296,23 @@ public:
 
   Rc<TextureAllocation> rename(Rc<TextureAllocation> &&newAllocation);
 
+  /**
+  On-demand PixelFormatView: a texture created without the usage (so Metal can compress it)
+  gets it when a view first reinterprets its data. The view's creation queues an upgrade on
+  `queue`; its encode thread then copies the current allocation into a new one with the usage
+  and renames, before encoding the next chunk. Null: the texture is never upgraded.
+  */
+  void
+  setPixelFormatViewUpgradeQueue(CommandQueue *queue) {
+    pfv_upgrade_queue_ = queue;
+  }
+  // a view in `format` would need PixelFormatView usage this texture does not have (yet)
+  bool needsPixelFormatViewUpgrade(WMTPixelFormat format);
+  // queue the upgrade if a view in `format` needs it; true if queued now or earlier
+  bool requestPixelFormatViewUpgradeFor(WMTPixelFormat format);
+  // encode thread: add the usage; false if the texture already had it
+  bool addPixelFormatViewUsage();
+
   Texture(const WMTTextureInfo &info, WMT::Device device);
 
   Texture(unsigned bytes_per_image, unsigned bytes_per_row, const WMTTextureInfo &info, WMT::Device device);
@@ -308,6 +331,8 @@ private:
   small_vector<TextureViewDescriptor, 4> viewDescriptors_;
   dxmt::shared_mutex mutex_;
   WMT::Device device_;
+  CommandQueue *pfv_upgrade_queue_ = nullptr;
+  std::atomic<bool> pfv_upgrade_requested_ = false;
 };
 
 class RenamableTexturePool {

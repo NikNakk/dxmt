@@ -1746,6 +1746,10 @@ ArgumentEncodingContext::isResolveSignatureMatched(RenderEncoderData *render, Re
     auto &descriptor_src = resolve->src->allocation->descriptor;
     auto &descriptor_dst = resolve->dst->allocation->descriptor;
     auto color_format = descriptor_src->pixelFormat(color.attachment->key);
+    // never create a reinterpreting view of a texture still waiting for PixelFormatView usage
+    if (descriptor_src->needsPixelFormatViewUpgrade(color_format) ||
+        descriptor_dst->needsPixelFormatViewUpgrade(color_format))
+      continue;
     auto view_src_in_color_format = descriptor_src->checkViewUseFormat(resolve->src->key, color_format);
     if (color.attachment->key == view_src_in_color_format) {
       auto view_dst_in_color_format = descriptor_dst->checkViewUseFormat(resolve->dst->key, color_format);

@@ -94,6 +94,9 @@ constexpr uint32_t kCommandChunkCount = 32;
 
 class CommandQueue;
 
+// encode thread, before a chunk's commands: see CommandQueue::applyPixelFormatViewUpgrades
+void ApplyPixelFormatViewUpgrades(CommandQueue *queue, ArgumentEncodingContext &enc);
+
 class CommandChunk {
 public:
   CommandChunk(const CommandChunk &) = delete; // delete copy constructor
@@ -113,6 +116,7 @@ public:
       chunk_id,
       frame_
     );
+    ApplyPixelFormatViewUpgrades(queue, enc);
     auto& statistics = enc.currentFrameStatistics();
     auto t0 = clock::now();
     list_enc.execute(enc);
@@ -207,6 +211,22 @@ public:
   CommandQueue(WMT::Device device);
 
   ~CommandQueue();
+
+  // On-demand PixelFormatView (see Texture::setPixelFormatViewUpgradeQueue): textures whose next
+  // chunk must first be copied into an allocation with the usage.
+  void
+  requestPixelFormatViewUpgrade(Texture *texture) {
+    std::lock_guard<dxmt::mutex> lock(pfv_upgrade_mutex_);
+    pfv_upgrade_pending_.push_back(texture);
+  }
+  // encode thread, before a chunk's commands
+  void applyPixelFormatViewUpgrades(ArgumentEncodingContext &enc);
+
+private:
+  dxmt::mutex pfv_upgrade_mutex_;
+  std::vector<Rc<Texture>> pfv_upgrade_pending_;
+
+public:
 
   CommandChunk *
   CurrentChunk() {

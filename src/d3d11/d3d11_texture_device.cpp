@@ -28,6 +28,8 @@
 #include "dxmt_native_interop.h"
 #include "util_win32_compat.h"
 
+#include "util_env.hpp"
+
 namespace dxmt {
 
 #pragma region DeviceTexture
@@ -391,10 +393,30 @@ HRESULT CreateDeviceTextureInternal(MTLD3D11Device *pDevice,
   }
   bool single_subresource = info.mipmap_level_count == 1 && info.array_length == 1 &&
                             !(finalDesc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE);
-  auto texture = Rc<Texture>(new Texture(info, pDevice->GetMTLDevice()));
 
   MTL_DXGI_FORMAT_DESC format_desc;
   MTLQueryDXGIFormat(pDevice->GetMTLDevice(), finalDesc.Format, format_desc);
+
+  // Typeless textures get PixelFormatView usage so they can be viewed in any format of their
+  // family, but the usage stops Apple GPUs compressing them, which costs bandwidth on every
+  // render target and resolve. Most are only ever viewed in their storage format or its sRGB
+  // twin, so leave the usage off and add it when a view first needs it (Texture::createView).
+  // Only for GPU-only textures that are not shared and not depth/stencil (plane views).
+  // DXMT_PIXEL_FORMAT_VIEW=always keeps the usage from the start.
+  static const bool pfv_always = env::getEnvVar("DXMT_PIXEL_FORMAT_VIEW") == "always";
+  auto shared_misc =
+      D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+  bool pfv_on_demand = !pfv_always && (info.usage & WMTTextureUsagePixelFormatView) &&
+                       (format_desc.Flag & MTL_DXGI_FORMAT_TYPELESS) &&
+                       !(format_desc.Flag & (MTL_DXGI_FORMAT_DEPTH_PLANER | MTL_DXGI_FORMAT_STENCIL_PLANER)) &&
+                       !finalDesc.CPUAccessFlags && !(finalDesc.MiscFlags & shared_misc) &&
+                       !(finalDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL) &&
+                       (finalDesc.Usage == D3D11_USAGE_DEFAULT || finalDesc.Usage == D3D11_USAGE_IMMUTABLE);
+  if (pfv_on_demand)
+    info.usage = (WMTTextureUsage)(info.usage & ~WMTTextureUsagePixelFormatView);
+  auto texture = Rc<Texture>(new Texture(info, pDevice->GetMTLDevice()));
+  if (pfv_on_demand)
+    texture->setPixelFormatViewUpgradeQueue(&pDevice->GetDXMTDevice().queue());
 
   auto &initializer = pDevice->GetDXMTDevice().queue().initializer;
 

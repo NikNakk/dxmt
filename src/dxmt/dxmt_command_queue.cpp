@@ -174,6 +174,67 @@ CommandQueue::CommitChunkInternal(CommandChunk &chunk, uint64_t seq) {
   ready_for_commit.notify_one();
 }
 
+void
+RequestPixelFormatViewUpgrade(CommandQueue *queue, Texture *texture) {
+  queue->requestPixelFormatViewUpgrade(texture);
+}
+
+void
+ApplyPixelFormatViewUpgrades(CommandQueue *queue, ArgumentEncodingContext &enc) {
+  queue->applyPixelFormatViewUpgrades(enc);
+}
+
+void
+CommandQueue::applyPixelFormatViewUpgrades(ArgumentEncodingContext &enc) {
+  std::vector<Rc<Texture>> pending;
+  {
+    std::lock_guard<dxmt::mutex> lock(pfv_upgrade_mutex_);
+    if (pfv_upgrade_pending_.empty())
+      return;
+    pending.swap(pfv_upgrade_pending_);
+  }
+  for (auto &texture : pending) {
+    if (!texture->addPixelFormatViewUsage())
+      continue;
+    auto old = texture->current();
+    auto flags = old->flags();
+    // the copy writes it, so it must be tracked like any other write
+    flags.clr(TextureAllocationFlag::GpuReadonly);
+    auto fresh = texture->allocate(flags);
+    unsigned levels = texture->miplevelCount();
+    unsigned slices = texture->textureType() == WMTTextureType3D ? 1 : texture->arrayLength();
+    enc.startBlitPass();
+    std::vector<WMT::Texture> sources;
+    sources.reserve(levels * slices);
+    for (unsigned slice = 0; slice < slices; slice++)
+      for (unsigned level = 0; level < levels; level++)
+        sources.push_back(enc.access(texture, level, slice, ResourceAccess::Read));
+    auto _ = texture->rename(std::move(fresh));
+    for (unsigned slice = 0; slice < slices; slice++) {
+      for (unsigned level = 0; level < levels; level++) {
+        auto dst = enc.access(texture, level, slice, ResourceAccess::Write);
+        auto &cmd = enc.encodeBlitCommand<wmtcmd_blit_copy_from_texture_to_texture>();
+        cmd.type = WMTBlitCommandCopyFromTextureToTexture;
+        cmd.src = sources[slice * levels + level];
+        cmd.src_slice = slice;
+        cmd.src_level = level;
+        cmd.src_origin = {0, 0, 0};
+        cmd.src_size = {
+            std::max(texture->width() >> level, 1u), std::max(texture->height() >> level, 1u),
+            std::max(texture->depth() >> level, 1u)
+        };
+        cmd.dst = dst;
+        cmd.dst_slice = slice;
+        cmd.dst_level = level;
+        cmd.dst_origin = {0, 0, 0};
+      }
+    }
+    enc.endPass();
+    WARN("PixelFormatView added on demand: ", texture->width(), "x", texture->height(), " samples=",
+         texture->sampleCount(), " format=", (uint32_t)texture->pixelFormat());
+  }
+}
+
 uint32_t
 CommandQueue::EncodingThread() {
 #if ASYNC_ENCODING
