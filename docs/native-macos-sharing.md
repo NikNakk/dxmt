@@ -97,3 +97,168 @@ resize and destruction with stock Wine 11.10 (2026-10-02). The same stack
 submitted 328 `hello_xr` frames to simulated Monado with direct runtime-image
 sharing and 520 to Meta with shared staging plus a native Metal blit. Native
 texture/event import Unix call IDs remain unchanged.
+
+
+## Protected immediate-context fences (2026-10-10)
+
+`Signal` and `Wait` hold the existing recursive device mutex across their
+complete command-stream operations, like other immediate-context operations.
+Previously `Signal` emitted its event before taking the lock indirectly in
+`Flush`. A thread inside `ID3D11Multithread::Enter` could then flush that event
+ahead of its own final texture writes. `Wait` likewise emitted its GPU wait
+after releasing the lock taken by `Flush`. The application retains control of
+`SetMultithreadProtected`; this change does not enable it globally.
+
+The consumer's standalone Wine/Metal graphics-interop probe uses its unchanged
+production DXMT backend and gates the final application clear with a native
+Metal event. A matched pre-fix build of `381052e` fails the premature-completion
+check for private Metal and IOSurface textures (2 failures). The corrected
+D3D11 DLL and its stripped installation artifact pass all probe cases (0
+failures), including array and reverse-write checks, with Metal validation
+active. Logs live in `macos-wine-xr/docs/results/dxmt-protected-fence-2026-10-10/`.
+No Monado service or headset is involved in this test. The change is installed
+for fresh local Wine launches; effects on headset checkerboards and pacing
+remain unverified, including whether those workloads enable protection.
+
+
+### Deployment dependency check
+
+The initial consumer deployment replaced D3D11 alone. A subsequent SteamVR
+launch aborted on the unavailable `winemetal.dll.WMTMetalViewSubmitted`
+presentation export in its older WineMetal DLL. The verified fence defect
+remains valid, but a texture-only probe cannot validate presentation ABI.
+Build/postprocess and deploy D3D11, DXGI, WineMetal PE and WineMetal native
+modules as a matching set. The consumer restored the old D3D11, then validated
+the complete new set with ordinary and cross-process child/sibling fixtures,
+fixture pixel capture (10 valid samples, no near-black output), and the fence
+probe before installing all matching modules. Fresh Steam/SteamVR and headset
+confirmation remain pending; the manifest and logs are retained in the
+consumer's `docs/results/dxmt-protected-fence-2026-10-10/`.
+
+
+The subsequent Home hardware follow-up still reports black frames and adds
+nonworking dashboard/Steam-logo panels. The consumer has restored its entire
+previous D3D11/DXGI/WineMetal presentation set to isolate that regression.
+The fence patch remains in this source tree, but is no longer deployed in the
+primary engine. Its standalone regression result remains valid; the broader
+presentation branch update is not accepted as a hardware-validated replacement.
+The consumer driver separately shortens keyed-mutex ownership before runtime
+frame commit; fresh application/headset validation remains pending.
+
+
+Subsequent connection logs show SteamVR was unable to connect to Steam until
+Steam was started separately. The consumer's dashboard/logo report therefore
+does not establish a regression in this branch's presentation code; rollback
+is an isolation measure. Visual corruption reports still precede a fresh
+SteamVR launch of the driver's early-handoff change. No panel recovery or
+headset synchronization fix is claimed.
+
+
+A fresh consumer session confirms the early-handoff driver but still has
+black frames. Its ReleaseSync calls can take 17.4–193 ms with sub-0.4 ms source
+holds, motivating bounded diagnostics in this fork that split context-lock
+entry, signal enqueue/Flush, and the remaining owner-release work. Check
+`signal_queued` before interpreting the final phase on failing calls.
+
+The consumer now deploys a minimal rebuild of its previous presentation
+baseline, `steamvr-in-process` (`756a657`), with only the proven Signal/Wait
+locks and those diagnostics. The reproduction patch is
+[retained here](patches/steamvr-in-process-sync-diagnostics.patch). Matching
+runtime/prefix modules passed the production fence probe, ordinary two-window
+presentation and 200 GPU keyed handoffs between two devices in one process.
+The baseline fence fix is deployed again; the broader presentation branch
+remains out of the primary engine. Fresh headset validation is pending.
+
+
+### Keyed owner-call phase diagnostics, 2026-10-10
+
+The owner-thread handoff now samples serialization, dispatch/thread creation,
+wakeup, time in D3DKMT/Wine and return notification separately. Slow/error logs
+include PID/caller thread, shared mutex handle, operation/key, timeout/status
+and GetTickCount64 timestamps. Sampling is bounded separately for acquire and
+release. No ownership, GPU fence or wait behavior changes. The independently
+staged minimal presentation baseline carries these diagnostics via
+`docs/patches/steamvr-in-process-sync-diagnostics.patch`.
+
+The final baseline passes controlled timeout followed by release on another
+caller thread and reacquisition, plus 200 alternating GPU pixel handoffs. The
+production D3D11/Metal protected-fence regression also passes with zero
+failures under Metal validation. Monado evidence is saved under
+`doc/results/steamvr-source-lock-20261010/`. Hardware phase attribution remains
+pending; an acquire duration inside Wine can include a legitimate wait for
+another owner and is not, by itself, evidence of Wine RPC overhead.
+
+
+The current minimal baseline also logs bounded per-ownership intervals:
+acquire callback setup, application-owned gap, release signal callback, and
+release owner handoff. Tick timestamps, PID and release fence permit matching
+to Wine server history. These are wall-clock durations, not GPU timings; the
+application gap can include context-lock waits or descheduling. A deliberately
+held mutex, timeout recovery, 200 GPU pixel handoffs and the graphics interop
+regression pass. Hardware early/late Home stack attribution is still pending.
+
+
+### Ownership wait attribution, 2026-10-11
+
+The same minimal `756a657` presentation baseline now logs `KeyedMutex owned
+waits` at successful releases with app-owned intervals at least 10 ms (first
+8, then every 128th per immediate context). Each record carries PID, caller,
+shared handle, acquisition-return tick, pre-release tick and release fence.
+Snapshots exclude that texture's acquire setup and release-signal Flush.
+Device-wide categories measure context/device-lock contention, Flush1 body,
+command-chunk capacity, CPU-coherence fence and frame-latency waits. Scopes
+run only while at least one keyed texture is owned; uncontended locks do not
+read a clock. Context and queue retain shared counter storage through teardown.
+
+Categories overlap: a Flush may include a capacity wait; other threads or
+simultaneously owned textures may contribute, and completed wait scopes can
+straddle snapshot boundaries. Do not sum categories or call the remaining
+wall time CPU rendering. GPU worker completion waits are deliberately absent:
+only producer CPU dependencies are measured. Frame-latency attribution is
+implemented but was not exercised in the ownership fixture.
+
+An isolated fixture verifies a controlled 35 ms context hold is attributed
+as about 38 ms contention, and actual flush/capacity/CPU-fence calls appear
+in GPU handoff records. Timeout recovery, cross-thread release, 200 alternating
+pixel handoffs and the production graphics interop protected-fence regression
+pass. The diagnostic patch applies to baseline 756a657 and reproduces all
+eight source files. Seven matched runtime/prefix modules are installed with
+backups; WineMetal and the driver hashes are unchanged. Hardware attribution
+awaits a fresh launch; hardened cross-process migration remains separate.
+Monado stores evidence in `doc/results/dxmt-owned-waits-20261011/`.
+
+
+### Separate DXGI pacing attribution, 2026-10-11
+
+Owned-wait logs also include `swapchain_latency_ms/calls` for SyncFrame's
+per-swapchain fence and `present_ms/calls` for the complete Present1 API call.
+The existing frame-latency field remains queue PresentBoundary pacing. The
+separate fence is enabled by DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.
+Total Present overlaps context/submission/pacing categories; do not sum them.
+Only timing scopes were added to the active fork and installed minimal
+baseline swapchain independently, preserving their existing presentation
+behavior and keeping the hardening migration separate.
+
+The isolated fixture now presents six times while owning a keyed texture and
+records six Present calls/five swapchain waits: 41.642 ms total Present,
+22.334 ms separate swapchain waiting and 0.013 ms queue pacing. Timeout recovery,
+context contention, 200 GPU handoffs and protected-fence interop all pass.
+The baseline builds, its patch reproduces nine source files, and seven matched
+modules are installed with backups. A fresh Steam/SteamVR run is needed for
+Home attribution; this fixture does not establish Home's black-frame cause.
+Monado evidence: `doc/results/dxmt-present-waits-20261011/`.
+
+
+### Requested hardware attribution test, 2026-10-11 01:03
+
+The user-requested PS VR2 Home test runs about two minutes with the new fields
+active and installed hashes verified. Thirty post-initial bounded samples
+show median ownership 24.010 ms and median total Present 0.052 ms; separate
+swapchain pacing is unused, queue pacing median zero/max 2.747 ms, and other
+measured producer waits are tiny. This excludes these DXMT dependencies as
+the bulk of the selected gap, not all possible application waits. Compositor
+mutex acquisition timeouts persist. Home reports 5879 presents; no visual
+observation or physical scanout timing claim is made. The test session is
+closed gracefully. Next probe should cover Home/OpenVR work/waits during
+ownership. The matched minimal baseline remains installed; hardened migration
+is separate. Monado evidence: `doc/results/steamvr-present-headset-20261011-010342/`.
