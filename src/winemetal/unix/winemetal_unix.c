@@ -511,7 +511,35 @@ _MTLLibrary_newFunction(void *obj) {
   struct unixcall_generic_obj_uint64_obj_ret *params = obj;
   id<MTLLibrary> library = (id<MTLLibrary>)params->handle;
   NSString *name = [[NSString alloc] initWithCString:(char *)params->arg encoding:NSUTF8StringEncoding];
-  params->ret = (obj_handle_t)[library newFunctionWithName:name];
+  id<MTLFunction> function = [library newFunctionWithName:name];
+  // dxmt_command.metal's stay-warped copy shader, compiled here when the prebuilt internal
+  // library predates it (a build without the Metal toolchain copies that library).
+  if (!function && [name isEqualToString:@"fs_rate_map_unwarp"]) {
+    static NSString *const source =
+        @"#include <metal_stdlib>\nusing namespace metal;\n"
+         "struct unwarp_desc { float2 src_origin; float2 dst_origin; };\n"
+         "struct unwarp_in { float4 position [[position]]; };\n"
+         "fragment float4 fs_rate_map_unwarp(unwarp_in input [[stage_in]], texture2d<float> source [[texture(0)]],\n"
+         "    const device float *tables [[buffer(30)]], constant unwarp_desc &desc [[buffer(29)]]) {\n"
+         "  constexpr sampler linear_pixel(coord::pixel, filter::linear, address::clamp_to_edge);\n"
+         "  float2 physical = float2(tables[0], tables[1]);\n"
+         "  float2 logical = float2(tables[2], tables[3]);\n"
+         "  const device float *forward_x = tables + 4 + uint(physical.x) + uint(physical.y);\n"
+         "  const device float *forward_y = forward_x + uint(logical.x) + 1;\n"
+         "  float2 p = clamp(input.position.xy - desc.dst_origin + desc.src_origin, float2(0), logical);\n"
+         "  float2 cell = min(floor(p), logical - 1);\n"
+         "  float2 f = p - cell;\n"
+         "  float2 q = float2(mix(forward_x[uint(cell.x)], forward_x[uint(cell.x) + 1], f.x),\n"
+         "                    mix(forward_y[uint(cell.y)], forward_y[uint(cell.y) + 1], f.y));\n"
+         "  return source.sample(linear_pixel, clamp(q, float2(0.5), physical - 0.5));\n"
+         "}\n";
+    NSError *error = nil;
+    id<MTLLibrary> fallback = [library.device newLibraryWithSource:source options:nil error:&error];
+    if (!fallback) NSLog(@"winemetal: fs_rate_map_unwarp: %@", error);
+    function = [fallback newFunctionWithName:name];
+    [fallback release];
+  }
+  params->ret = (obj_handle_t)function;
   [name release];
   return STATUS_SUCCESS;
 }

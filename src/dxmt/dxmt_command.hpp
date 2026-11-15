@@ -225,6 +225,27 @@ private:
   WMT::Reference<WMT::ComputePipelineState> pso_copy_to_buffer_d32s8_;
 };
 
+// Copies a colour texture left in a rate map's physical layout into an ordinary
+// destination, resampling through the map's forward tables (stay-warped foveation).
+class RateMapUnwarpContext {
+public:
+  RateMapUnwarpContext(WMT::Device device, InternalCommandLibrary &lib, ArgumentEncodingContext &ctx);
+
+  static bool supports(WMTPixelFormat format);
+
+  // The current pass must have ended. src/dst formats may differ only in sRGB-ness.
+  bool copy(
+      const Rc<Texture> &src, uint32_t src_level, uint32_t src_slice, WMTOrigin src_origin, WMTSize size,
+      const Rc<Texture> &dst, uint32_t dst_level, uint32_t dst_slice, WMTOrigin dst_origin
+  );
+
+private:
+  ArgumentEncodingContext &ctx_;
+  WMT::Device device_;
+  WMT::Reference<WMT::Function> vs_, fs_;
+  std::unordered_map<uint32_t, WMT::Reference<WMT::RenderPipelineState>> pso_cache_;
+};
+
 class MTLFXMVScaleContext {
 public:
   MTLFXMVScaleContext(WMT::Device device, InternalCommandLibrary &lib, ArgumentEncodingContext &ctx);

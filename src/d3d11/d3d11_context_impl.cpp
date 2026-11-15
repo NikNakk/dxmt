@@ -4037,10 +4037,49 @@ public:
         });
       } else if (auto src = GetTexture(cmd.pSrc)) {
         // on-device copy
+        static const bool debug_dump_copy = !env::getEnvVar("DXMT_DEBUG_DUMP_PATH").empty();
+        if (debug_dump_copy && dst->external_storage && !cmd.Dst.ArraySlice) debug_dump_target_ = cmd.pDst;
+        // Stay-warped foveation: tell the OpenXR layer what the application hands to a
+        // swapchain image, so that it can fit the rate map to that texture rather than to
+        // the swapchain. Private data on the image, one entry per array slice (0, 1):
+        // {sequence, source width, height, box left, top, right, bottom, source samples}.
+        static const bool stay_warped_copy = !env::getEnvVar("DXMT_STAY_WARPED").empty();
+        if (stay_warped_copy && dst->external_storage && cmd.Dst.ArraySlice < 2 && !cmd.Src.MipLevel) {
+          static std::atomic<uint32_t> copy_sequence;
+          const uint32_t source[8] = {++copy_sequence, uint32_t(src->width()), uint32_t(src->height()),
+                                      uint32_t(cmd.SrcOrigin.x), uint32_t(cmd.SrcOrigin.y),
+                                      uint32_t(cmd.SrcOrigin.x + cmd.SrcSize.width), uint32_t(cmd.SrcOrigin.y + cmd.SrcSize.height),
+                                      uint32_t(src->sampleCount())};
+          GUID guid = {0x6d777872, 0x6373, 0x4f56, {0x90, 0x01, 'c', 'o', 'p', 'y', 0, uint8_t(cmd.Dst.ArraySlice)}};
+          cmd.pDst->SetPrivateData(guid, sizeof(source), source);
+        }
         SwitchToBlitEncoder(CommandBufferState::BlitEncoderActive);
         EmitOP([dst_ = std::move(dst), src_ = std::move(src), cmd = std::move(cmd)](ArgumentEncodingContext &enc) {
           auto src_format = src_->pixelFormat();
           auto dst_format = dst_->pixelFormat();
+          if (src_->rate_map_layout && dst_.ptr() != src_.ptr()) {
+            // Stay-warped source. The compositor reads swapchain images outside DXMT, so a
+            // copy into one resamples to the ordinary layout; any other whole-image copy is
+            // texel-for-texel and its destination inherits the layout.
+            if (dst_->external_storage) {
+              enc.endPass();
+              bool done = enc.rate_map_unwarp_cmd.copy(src_, cmd.Src.MipLevel, cmd.Src.ArraySlice, cmd.SrcOrigin, cmd.SrcSize,
+                                                       dst_, cmd.Dst.MipLevel, cmd.Dst.ArraySlice, cmd.DstOrigin);
+              enc.startBlitPass();
+              if (done)
+                return;
+              static bool warned;
+              if (!std::exchange(warned, true))
+                WARN("Rate-map copy: warped source copied to a swapchain image without resampling");
+            } else if (!cmd.Src.MipLevel && !cmd.Dst.MipLevel && !cmd.SrcOrigin.x && !cmd.SrcOrigin.y && !cmd.DstOrigin.x &&
+                       !cmd.DstOrigin.y && cmd.SrcSize.width == src_->width() && cmd.SrcSize.height == src_->height() &&
+                       dst_->width() == src_->width() && dst_->height() == src_->height()) {
+              dst_->rate_map_layout = src_->rate_map_layout;
+            }
+          } else if (dst_->rate_map_layout && !cmd.Dst.MipLevel && !cmd.DstOrigin.x && !cmd.DstOrigin.y &&
+                     cmd.SrcSize.width == dst_->width() && cmd.SrcSize.height == dst_->height()) {
+            dst_->rate_map_layout = {};
+          }
           auto src = enc.access(src_, cmd.Src.MipLevel, cmd.Src.ArraySlice, ResourceAccess::Read);
           auto dst = enc.access(dst_, cmd.Dst.MipLevel, cmd.Dst.ArraySlice, ResourceAccess::Write);
           if (Forget_sRGB(dst_format) != Forget_sRGB(src_format)) {
