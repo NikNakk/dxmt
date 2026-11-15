@@ -116,6 +116,8 @@ public:
       chunk_id,
       frame_
     );
+    enc.tbdr_audit={};
+    enc.tbdr_audit.active=tbdrAuditSelected(frame_,chunk_id);
     ApplyPixelFormatViewUpgrades(queue, enc);
     auto& statistics = enc.currentFrameStatistics();
     auto t0 = clock::now();
@@ -126,8 +128,14 @@ public:
     auto t2 = clock::now();
     statistics.encode_prepare_interval += (t1 - t0);
     statistics.encode_flush_interval += (t2 - t1);
+    audit=enc.tbdr_audit;
+    if(audit.active){
+      audit.prepare_ms=std::chrono::duration<double,std::milli>(t1-t0).count();
+      audit.encode_ms=std::chrono::duration<double,std::milli>(t2-t1).count();
+    }
   };
 
+  TBDRAuditStats audit;
   uint64_t chunk_id;
   uint64_t chunk_event_id;
   uint64_t frame_;

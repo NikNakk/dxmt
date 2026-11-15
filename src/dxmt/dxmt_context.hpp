@@ -17,6 +17,7 @@
  */
 
 #pragma once
+#include "dxmt_tbdr_audit.hpp"
 
 #include "Metal.hpp"
 #include "dxmt_buffer.hpp"
@@ -712,6 +713,7 @@ public:
   WMT::Reference<WMT::Buffer> rate_map_positions;
   WMTSize rate_map_logical_size={};
 
+  TBDRAuditStats tbdr_audit;
   WMT::Reference<WMT::Object> base_foveation_map;
   WMT::Reference<WMT::Buffer> base_foveation_forward, base_foveation_inverse;
   WMT::Reference<WMT::ComputePipelineState> base_foveation_pipeline;

@@ -1087,6 +1087,33 @@ computeLabel(ComputeEncoderData *data) {
 
 } // namespace
 
+// Uncompressed attachment-work proxy only, not measured DRAM traffic. Combined
+// depth/stencil views are recorded once by the caller. No native property query.
+static void auditAttachment(TBDRAuditStats &a,const char *role,TextureViewRef view,WMTLoadAction load,
+    WMTStoreAction store,TextureViewRef resolved,uint32_t width,uint32_t height,uint32_t layers,
+    uint64_t seq,uint64_t frame,uint64_t encoder){
+  if(!a.active || !view)return;
+  auto texture=view->allocation->descriptor;auto format=texture->pixelFormat(view->key);
+  width=std::min(width?width:texture->width(view->key),texture->width(view->key));
+  height=std::min(height?height:texture->height(view->key),texture->height(view->key));
+  layers=std::max(layers,1u);auto samples=texture->sampleCount();auto bytes=MTLGetTexelSize(format);
+  // Nominal packed D3D depth/stencil payload; not Metal physical allocation size.
+  if(format==WMTPixelFormatDepth32Float_Stencil8)bytes=8;
+  uint64_t footprint=uint64_t(width)*height*layers*samples*bytes;
+  if(!bytes)++a.unknown_formats;
+  if(load==WMTLoadActionLoad)a.load_proxy+=footprint;
+  if(store==WMTStoreActionStore || store==WMTStoreActionStoreAndMultisampleResolve)a.store_proxy+=footprint;
+  if(resolved)a.resolve_proxy+=uint64_t(width)*height*layers*bytes;
+  auto usage=view->allocation->usage;
+  if(usage&WMTTextureUsageShaderWrite)a.shaderwrite_proxy+=footprint;
+  if(usage&WMTTextureUsagePixelFormatView)a.pfv_proxy+=footprint;
+  if(tbdrAuditDetailRow())tbdrAuditLog("attachment seq=%llu frame=%llu encoder=%llu role=%s resource=%p allocation=%p native=%llx view=%llx width=%u height=%u layers=%u samples=%u format=%u usage=%u private=%u managed=%u load=%u store=%u resolve=%llx footprint=%llu",
+      (unsigned long long)seq,(unsigned long long)frame,(unsigned long long)encoder,role,texture,view->allocation,
+      (unsigned long long)view.texture().handle,(unsigned long long)uint64_t(view->key),width,height,layers,samples,unsigned(format),unsigned(usage),
+      unsigned(view->allocation->flags().test(TextureAllocationFlag::GpuPrivate)),unsigned(view->allocation->flags().test(TextureAllocationFlag::GpuManaged)),
+      unsigned(load),unsigned(store),(unsigned long long)resolved.texture().handle,(unsigned long long)footprint);
+}
+
 QueryReadbacks
 ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId, uint64_t event_seq_id) {
   assert(!encoder_current);
@@ -1106,6 +1133,11 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
     assert(encoder_index == encoder_count);
   }
 
+  if(tbdr_audit.active)for(unsigned i=0;i<encoder_count;++i){
+    tbdr_audit.render_before+=encoders[i]->type==EncoderType::Render;
+    tbdr_audit.clear_before+=encoders[i]->type==EncoderType::Clear;
+    tbdr_audit.resolve_before+=encoders[i]->type==EncoderType::Resolve;
+  }
   if (encoder_count > 1) {
     unsigned j, i;
     for (j = encoder_count - 2; j != ~0u; j--) {
@@ -1121,6 +1153,21 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
     }
   }
 
+  if(tbdr_audit.active)for(unsigned i=0;i<encoder_count;++i){
+    switch(encoders[i]->type){
+    case EncoderType::Render:++tbdr_audit.render_after;break;
+    case EncoderType::Clear:++tbdr_audit.clear_after;break;
+    case EncoderType::Resolve:++tbdr_audit.resolve_after;break;
+    case EncoderType::Compute:++tbdr_audit.compute;break;
+    case EncoderType::Blit:++tbdr_audit.blit;break;
+    case EncoderType::TemporalUpscale:++tbdr_audit.temporal;break;
+    case EncoderType::Present:++tbdr_audit.present;break;
+    case EncoderType::SignalEvent:++tbdr_audit.signals;break;
+    case EncoderType::WaitForEvent:++tbdr_audit.waits;break;
+    case EncoderType::SampleTimestamp:++tbdr_audit.timestamps;break;
+    default:break;
+    }
+  }
   QueryReadbacks readbacks{};
 
   if (auto count = vro_state_.reset()) {
@@ -1216,13 +1263,30 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
           data->render_target_count==1 && attachment_supported && data->render_target_array_length<=1 &&
           data->render_target_width==data->rate_map_logical_size.width && data->render_target_height==data->rate_map_logical_size.height;
       if(position_mode && !mapped_position) render_pass_info.rasterization_rate_map=0;
+      if(tbdr_audit.active){
+        tbdr_audit.mapped_render+=render_pass_info.rasterization_rate_map!=0;
+        for(unsigned i=0;i<data->render_target_count;++i){auto &v=data->colors[i];
+          auditAttachment(tbdr_audit,"color",v.attachment,v.load_action,v.store_action,v.resolve_attachment,
+            data->render_target_width,data->render_target_height,data->render_target_array_length,seqId,currentFrameId(),data->id);
+        }
+        auto &d=data->depth;auto &st=data->stencil;
+        if(d.attachment && d.attachment==st.attachment){
+          auto load=(d.load_action==WMTLoadActionLoad || st.load_action==WMTLoadActionLoad)?WMTLoadActionLoad:d.load_action;
+          auto store=(d.store_action==WMTStoreActionStore || st.store_action==WMTStoreActionStore)?WMTStoreActionStore:WMTStoreActionDontCare;
+          auditAttachment(tbdr_audit,"depth_stencil",d.attachment,load,store,{},data->render_target_width,data->render_target_height,data->render_target_array_length,seqId,currentFrameId(),data->id);
+        }else{
+          auditAttachment(tbdr_audit,"depth",d.attachment,d.load_action,d.store_action,{},data->render_target_width,data->render_target_height,data->render_target_array_length,seqId,currentFrameId(),data->id);
+          auditAttachment(tbdr_audit,"stencil",st.attachment,st.load_action,st.store_action,{},data->render_target_width,data->render_target_height,data->render_target_array_length,seqId,currentFrameId(),data->id);
+        }
+        if(tbdrAuditDetailRow())tbdrAuditLog("render seq=%llu frame=%llu encoder=%llu label=%s",(unsigned long long)seqId,(unsigned long long)currentFrameId(),(unsigned long long)data->id,renderLabel(data).c_str());
+      }
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
       if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(renderLabel(data).c_str(), WMTUTF8StringEncoding));
       data->fence_wait.forEach(
           data->fence_wait_vertex, // if a fence is waited pre-raster, no need to wait again at fragment
-          [&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStagePreRaster); },
-          [&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); }
+          [&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id], WMTRenderStagePreRaster); },
+          [&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); }
       );
       encoder.setVertexBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_VERTEX_BUFFER);
       encoder.setVertexBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_CONSTANT_BUFFER);
@@ -1320,7 +1384,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         if(sceneTraceEnabled()) sceneTrace("base_foveation_unwarp encoder=%llu",(unsigned long long)data->id);
       } else if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(computeLabel(data).c_str(), WMTUTF8StringEncoding));
-      data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id]); });
+      data->fence_wait.forEach([&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id]); });
       struct wmtcmd_compute_setbuffer setcmd;
       setcmd.type = WMTComputeCommandSetBuffer;
       setcmd.next.set(nullptr);
@@ -1339,7 +1403,13 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
     case EncoderType::Blit: {
       auto data = static_cast<BlitEncoderData *>(current);
       auto encoder = cmdbuf.blitCommandEncoder();
-      data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id]); });
+      data->fence_wait.forEach([&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id]); });
+      if(tbdr_audit.active)for(auto cmd=reinterpret_cast<const wmtcmd_base *>(&data->cmd_head);cmd;
+          cmd=reinterpret_cast<const wmtcmd_base *>(const_cast<WMTMemoryPointer &>(cmd->next).get())){
+        ++tbdr_audit.blit_ops;
+        tbdr_audit.texture_copies+=cmd->type==WMTBlitCommandCopyFromTextureToTexture || cmd->type==WMTBlitCommandCopyTexture;
+        tbdr_audit.buffer_copies+=cmd->type==WMTBlitCommandCopyFromBufferToBuffer || cmd->type==WMTBlitCommandCopyFromBufferToTexture || cmd->type==WMTBlitCommandCopyFromTextureToBuffer;
+      }
       encoder.encodeCommands(&data->cmd_head);
       data->fence_update.forEach([&](auto id) { encoder.updateFence(fence_pool_[id]); });
       encoder.endEncoding();
@@ -1352,7 +1422,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
       auto drawable = data->presenter->encodeCommands(
           cmdbuf, data->backbuffer, data->metadata,
           [&](WMT::RenderCommandEncoder encoder) {
-            data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
+            data->fence_wait.forEach([&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
           },
           [&](WMT::RenderCommandEncoder encoder) {
             data->fence_update.forEach([&](auto id) { encoder.updateFence(fence_pool_[id], WMTRenderStageFragment); });
@@ -1393,6 +1463,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
           info.colors[0].load_action = WMTLoadActionClear;
           info.colors[0].store_action = WMTStoreActionStore;
         }
+        auditAttachment(tbdr_audit,data->clear_dsv?"clear_depth_stencil":"clear_color",data->attachment,WMTLoadActionClear,WMTStoreActionStore,{},data->width,data->height,data->array_length,seqId,currentFrameId(),data->id);
         info.render_target_array_length = data->array_length;
         auto encoder = cmdbuf.renderCommandEncoder(info);
         if (encoderLabelsEnabled()) {
@@ -1405,7 +1476,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         } else {
           encoder.setLabel(WMT::String::string("ClearPass", WMTUTF8StringEncoding));
         }
-        data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
+        data->fence_wait.forEach([&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
         data->fence_update.forEach([&](auto id) { encoder.updateFence(fence_pool_[id], WMTRenderStageFragment); });
         encoder.endEncoding();
       }
@@ -1421,10 +1492,11 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         info.colors[0].load_action = WMTLoadActionLoad;
         info.colors[0].store_action = WMTStoreActionStoreAndMultisampleResolve;
         info.colors[0].resolve_texture = data->dst.texture();
+        auditAttachment(tbdr_audit,"resolve_source",data->src,WMTLoadActionLoad,WMTStoreActionStoreAndMultisampleResolve,data->dst,0,0,1,seqId,currentFrameId(),data->id);
 
         auto encoder = cmdbuf.renderCommandEncoder(info);
         encoder.setLabel(WMT::String::string("ResolvePass", WMTUTF8StringEncoding));
-        data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
+        data->fence_wait.forEach([&](auto id) { if(tbdr_audit.active)++tbdr_audit.fence_waits; encoder.waitForFence(fence_pool_[id], WMTRenderStageFragment); });
         data->fence_update.forEach([&](auto id) { encoder.updateFence(fence_pool_[id], WMTRenderStageFragment); });
         encoder.endEncoding();
       }
@@ -1657,9 +1729,10 @@ ArgumentEncodingContext::checkEncoderRelation(EncoderData *former, EncoderData *
     auto r1 = reinterpret_cast<RenderEncoderData *>(latter);
     auto r0 = reinterpret_cast<RenderEncoderData *>(former);
 
-    if (isEncoderSignatureMatched(r0, r1) &&
-        // can't merge if latter's vertex wait for former's fragment
-        !r1->fence_wait_vertex.intersectedWith(r0->fence_update)) {
+    bool signature=isEncoderSignatureMatched(r0,r1);
+    bool dependency=signature && r1->fence_wait_vertex.intersectedWith(r0->fence_update);
+    if(tbdr_audit.active && dependency)++tbdr_audit.merge_dependency;
+    if(signature && !dependency) {
       for (unsigned i = 0; i < r0->render_target_count; i++) {
         auto &a0 = r0->colors[i];
         auto &a1 = r1->colors[i];
@@ -1749,65 +1822,66 @@ ArgumentEncodingContext::hasDataDependency(EncoderData *latter, EncoderData *for
 
 bool
 ArgumentEncodingContext::isEncoderSignatureMatched(RenderEncoderData *r0, RenderEncoderData *r1) {
+  auto reject=[&](uint64_t &reason){if(tbdr_audit.active)++reason;return false;};
   // Different maps change physical pixel layout and must never merge.
   if (r0->rasterization_rate_map.handle != r1->rasterization_rate_map.handle)
-    return false;
-  if(r0->rate_map_positions.handle!=r1->rate_map_positions.handle) return false;
+    return reject(tbdr_audit.merge_map);
+  if(r0->rate_map_positions.handle!=r1->rate_map_positions.handle) return reject(tbdr_audit.merge_map);
   // FIXME: it can be different?
   if (r0->render_target_count != r1->render_target_count)
-    return false;
+    return reject(tbdr_audit.merge_layout);
   if (r0->dsv_planar_flags != r1->dsv_planar_flags)
-    return false;
+    return reject(tbdr_audit.merge_layout);
   if (r0->dsv_readonly_flags != r1->dsv_readonly_flags)
-    return false;
+    return reject(tbdr_audit.merge_layout);
   if (r0->render_target_array_length != r1->render_target_array_length)
-    return false;
+    return reject(tbdr_audit.merge_layout);
   /**
   In case two encoder has different argument buffer
   It can be further optimized by inserting extra setBuffer() calls
   but let's just simplify it, as it's a rather rare case.
   */
   if (r0->allocated_argbuf != r1->allocated_argbuf)
-    return false;
+    return reject(tbdr_audit.merge_argbuf);
   if (r0->dsv_planar_flags & 1) {
     if (r0->depth.attachment != r1->depth.attachment)
-      return false;
+      return reject(tbdr_audit.merge_attachment);
     if (r0->dsv_readonly_flags & 1) {
       if (r1->depth.load_action == WMTLoadActionClear)
-        return false;
+        return reject(tbdr_audit.merge_action);
     } else {
       if (r0->depth.store_action != WMTStoreActionStore)
-        return false;
+        return reject(tbdr_audit.merge_action);
       if (r1->depth.load_action != WMTLoadActionLoad)
-        return false;
+        return reject(tbdr_audit.merge_action);
     }
   }
   if (r0->dsv_planar_flags & 2) {
     if (r0->stencil.attachment != r1->stencil.attachment)
-      return false;
+      return reject(tbdr_audit.merge_attachment);
     if (r0->dsv_readonly_flags & 2) {
       if (r1->stencil.load_action == WMTLoadActionClear)
-        return false;
+        return reject(tbdr_audit.merge_action);
     } else {
       if (r0->stencil.store_action != WMTStoreActionStore)
-        return false;
+        return reject(tbdr_audit.merge_action);
       if (r1->stencil.load_action != WMTLoadActionLoad)
-        return false;
+        return reject(tbdr_audit.merge_action);
     }
   }
   for (unsigned i = 0; i < r0->render_target_count; i++) {
     auto &a0 = r0->colors[i];
     auto &a1 = r1->colors[i];
     if (a0.attachment != a1.attachment)
-      return false;
+      return reject(tbdr_audit.merge_attachment);
     if (a0.depth_plane != a1.depth_plane)
-      return false;
+      return reject(tbdr_audit.merge_layout);
     if (!a0.attachment)
       continue;
     if (a0.store_action != WMTStoreActionStore)
-      return false;
+      return reject(tbdr_audit.merge_action);
     if (a1.load_action != WMTLoadActionLoad)
-      return false;
+      return reject(tbdr_audit.merge_action);
   }
   return true;
 }

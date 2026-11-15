@@ -22,6 +22,7 @@
 #include "dxmt_format.hpp"
 #include "log/log.hpp"
 #include "util_env.hpp"
+#include "dxmt_tbdr_audit.hpp"
 #include <atomic>
 #include <cassert>
 
@@ -96,6 +97,11 @@ TextureAllocation::TextureAllocation(
   mappedMemory = nullptr;
   gpuResourceID = textureDescriptor.gpu_resource_id;
   machPort = textureDescriptor.mach_port;
+  if(uint64_t(textureDescriptor.width)*textureDescriptor.height>=262144 &&
+      (usage&(WMTTextureUsageRenderTarget|WMTTextureUsageShaderWrite)) && tbdrAuditDetailRow())
+    tbdrAuditLog("allocation resource=%p allocation=%p native=%llx width=%u height=%u layers=%u samples=%u mips=%u format=%u usage=%u options=%u",
+      descriptor,this,(unsigned long long)obj_.handle,textureDescriptor.width,textureDescriptor.height,textureDescriptor.array_length,
+      textureDescriptor.sample_count,textureDescriptor.mipmap_level_count,unsigned(textureDescriptor.pixel_format),unsigned(usage),unsigned(textureDescriptor.options));
   fenceTrackers.resize(
       flags.test(TextureAllocationFlag::ShaderReadonly) ? 1 : descriptor->arrayLength() * descriptor->miplevelCount()
   );
