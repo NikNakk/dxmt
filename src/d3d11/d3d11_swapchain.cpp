@@ -1135,6 +1135,25 @@ private:
   float scale_factor = 1.0;
 };
 
+// A hidden 1x1 popup owned by the calling thread, made again if that thread has gone.
+static HWND
+DesktopStandInWindow() {
+  static dxmt::mutex mutex;
+  static HWND window = nullptr;
+  std::lock_guard<dxmt::mutex> lock(mutex);
+  if (window && IsWindow(window)) return window;
+  HINSTANCE instance = GetModuleHandleW(nullptr);
+  WNDCLASSEXW wc = {};
+  wc.cbSize = sizeof(wc);
+  wc.lpfnWndProc = DefWindowProcW;
+  wc.hInstance = instance;
+  wc.lpszClassName = L"DXMTDesktopStandIn";
+  RegisterClassExW(&wc); // fails harmlessly once registered
+  window = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"", WS_POPUP,
+                           0, 0, 1, 1, nullptr, nullptr, instance, nullptr);
+  return window;
+}
+
 HRESULT
 CreateSwapChain(
     IDXGIFactory1 *pFactory, MTLD3D11Device *pDevice, HWND hWnd, const DXGI_SWAP_CHAIN_DESC1 *pDesc,
@@ -1145,6 +1164,21 @@ CreateSwapChain(
   if (ppSwapChain == NULL)
     return DXGI_ERROR_INVALID_CALL;
   InitReturnPtr(ppSwapChain);
+
+  // Hooking tools (UEVR, REFramework, ReShade-style overlays) find IDXGISwapChain's
+  // vtable from a throwaway swapchain on the desktop window, which Windows allows. The
+  // desktop belongs to explorer here, so give them one on a hidden window of their own:
+  // the same class and vtable as the game's swapchain, never presented.
+  if (hWnd && hWnd == GetDesktopWindow()) {
+    HWND stand_in = DesktopStandInWindow();
+    if (!stand_in) {
+      ERR("CreateSwapChain: no stand-in window for the desktop window (error ", GetLastError(), ")");
+      return E_FAIL;
+    }
+    WARN("CreateSwapChain: desktop window ", hWnd, " requested by ", env::getExeBaseName(),
+         "; using hidden stand-in window ", stand_in);
+    hWnd = stand_in;
+  }
 
   DWORD window_process_id;
   GetWindowThreadProcessId(hWnd, &window_process_id);
