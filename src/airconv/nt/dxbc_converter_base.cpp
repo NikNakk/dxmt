@@ -684,6 +684,8 @@ Converter::StoreOperandHull(const DstOperandIndexableOutput &DstOp, llvm::Value 
 
 void
 Converter::StoreOperand(const DstOperandTemp &DstOp, llvm::Value *Value) {
+  if (DstOp.regid == pixel_coord_temp && (DstOp._.mask & 3))
+    pixel_coord_temp = ~0u;
   auto ValueInt = ZExtAndBitcastToInt32(Value);
 
   auto Handle = res.temp.ptr_int4;
@@ -1124,6 +1126,15 @@ Converter::operator()(const InstConvert &convert) {
   }
 
   StoreOperand(convert.dst, Value);
+
+  // Remember a temp that now holds int(SV_Position.xy) (translated position, truncated).
+  if (convert.op == ConversionOp::FloatToSigned || convert.op == ConversionOp::FloatToUnsigned) {
+    auto Dst = std::get_if<DstOperandTemp>(&convert.dst);
+    auto Src = std::get_if<SrcOperandInput>(&convert.src);
+    if (Dst && Src && res.rate_map_raw_position && Src->regid == res.rate_map_position_reg && Dst->phase == ~0u &&
+        (Dst->_.mask & 3) == 3 && Src->_.swizzle.x == 0 && Src->_.swizzle.y == 1 && !Src->_.abs && !Src->_.neg)
+      pixel_coord_temp = Dst->regid;
+  }
 }
 
 void
@@ -1423,8 +1434,14 @@ Converter::operator()(const InstLoad &load) {
   case Texture::depth2d:
   case Texture::texture2d_ms:
   case Texture::depth_2d_ms:
-    Address = RateMapTexel(Address, Tex->Metadata);
+  {
+    // int(SV_Position.xy) used directly as the address: the usual fullscreen pattern.
+    auto Temp = std::get_if<SrcOperandTemp>(&load.src_address);
+    const bool OwnPixel = Temp && Temp->regid == pixel_coord_temp && Temp->phase == ~0u && Temp->_.swizzle.x == 0 &&
+                          Temp->_.swizzle.y == 1 && !Temp->_.abs && !Temp->_.neg && Offset->isNullValue();
+    Address = RateMapTexel(Address, Tex->Metadata, OwnPixel);
     break;
+  }
   default:
     break;
   }
@@ -1586,28 +1603,56 @@ Converter::RateMapPhysical(llvm::Value *Logical, bool Normalized) {
   return Result;
 }
 
+// Integer loads use a per-pixel table: one read per axis, no interpolation.
+llvm::Value *
+Converter::RateMapTexelTable(llvm::Value *Address) {
+  auto FloatTy = air.getFloatTy();
+  auto IntTy = air.getIntTy();
+  auto Table = ctx.function->getArg(ctx.rate_map_read_argument);
+  auto Load = [&](llvm::Value *Index) { return ir.CreateLoad(FloatTy, ir.CreateGEP(FloatTy, Table, Index)); };
+  llvm::Value *Size[4];
+  for (unsigned i = 0; i < 4; i++)
+    Size[i] = ir.CreateFPToUI(Load(ir.getInt32(i)), IntTy);
+  // header, inverse tables, forward tables (logical + 1 each), then texel tables
+  llvm::Value *Base = ir.CreateAdd(
+      ir.CreateAdd(ir.getInt32(6), ir.CreateAdd(Size[0], Size[1])), ir.CreateAdd(Size[2], Size[3])
+  );
+  llvm::Value *Result = Address;
+  for (unsigned Axis = 0; Axis < 2; Axis++) {
+    llvm::Value *Pixel = ir.CreateExtractElement(Address, Axis);
+    auto Last = ir.CreateSub(Size[2 + Axis], ir.getInt32(1));
+    Pixel = ir.CreateSelect(ir.CreateICmpSLT(Pixel, ir.getInt32(0)), ir.getInt32(0), Pixel);
+    Pixel = ir.CreateSelect(ir.CreateICmpSGT(Pixel, Last), Last, Pixel);
+    Result = ir.CreateInsertElement(Result, ir.CreateFPToUI(Load(ir.CreateAdd(Base, Pixel)), IntTy), Axis);
+    Base = ir.CreateAdd(Base, Size[2 + Axis]);
+  }
+  return Result;
+}
+
 // A real branch: reads of ordinary textures pay one test of metadata they
 // already loaded. Block terminators are emitted at the builder's final
 // position, so splitting the current block here is safe.
+// OwnPixel: the address is int(SV_Position.xy). When the texture shares the
+// pass's map (second metadata bit), the untranslated position already is the
+// physical texel, so neither table is consulted.
 llvm::Value *
-Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized) {
+Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized, bool OwnPixel) {
   auto Mapped = RateMapMapped(Metadata);
   if (!Mapped)
     return Original;
+  if (OwnPixel && res.rate_map_raw_position) {
+    auto Same = ir.CreateICmpNE(ir.CreateAnd(Metadata, llvm::ConstantInt::get(Metadata->getType(), 1ull << 62)),
+                                llvm::ConstantInt::get(Metadata->getType(), 0));
+    auto Raw = ir.CreateShuffleVector(res.rate_map_raw_position, {0, 1});
+    Original = ir.CreateSelect(Same, ir.CreateFPToSI(Raw, air.getIntTy(2)), Original);
+    Mapped = ir.CreateAnd(Mapped, ir.CreateNot(Same));
+  }
   auto Entry = ir.GetInsertBlock();
   auto Translate = llvm::BasicBlock::Create(ctx.llvm, "rate_map_read", ctx.function);
   auto Join = llvm::BasicBlock::Create(ctx.llvm, "rate_map_read_join", ctx.function);
   ir.CreateCondBr(Mapped, Translate, Join);
   ir.SetInsertPoint(Translate);
-  llvm::Value *Translated;
-  if (Normalized) {
-    Translated = RateMapPhysical(Original, true);
-  } else {
-    auto Centre = ir.CreateFAdd(
-        ir.CreateSIToFP(Original, air.getFloatTy(2)), llvm::ConstantFP::get(air.getFloatTy(2), 0.5)
-    );
-    Translated = ir.CreateFPToUI(RateMapPhysical(Centre, false), air.getIntTy(2));
-  }
+  llvm::Value *Translated = Normalized ? RateMapPhysical(Original, true) : RateMapTexelTable(Original);
   auto End = ir.GetInsertBlock();
   ir.CreateBr(Join);
   ir.SetInsertPoint(Join);
@@ -1618,8 +1663,8 @@ Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Norm
 }
 
 llvm::Value *
-Converter::RateMapTexel(llvm::Value *Address, llvm::Value *Metadata) {
-  return RateMapBranch(Address, Metadata, false);
+Converter::RateMapTexel(llvm::Value *Address, llvm::Value *Metadata, bool OwnPixel) {
+  return RateMapBranch(Address, Metadata, false, OwnPixel);
 }
 
 llvm::Value *

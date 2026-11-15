@@ -461,14 +461,18 @@ public:
   llvm::Value *
   DecodeTextureArrayLength(llvm::Value *Metadata) {
     // The top bit marks a target whose contents are in a rate map's physical layout.
-    return ir.CreateAnd(ir.CreateTrunc(ir.CreateLShr(Metadata, 32uLL), air.getIntTy()), 0x7fffffffu);
+    return ir.CreateAnd(ir.CreateTrunc(ir.CreateLShr(Metadata, 32uLL), air.getIntTy()), 0x3fffffffu);
   }
 
   /* Reads of render targets left in rasterization-rate-map layout */
   llvm::Value *RateMapMapped(llvm::Value *Metadata);
   llvm::Value *RateMapPhysical(llvm::Value *Logical, bool Normalized);
-  llvm::Value *RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized);
-  llvm::Value *RateMapTexel(llvm::Value *Address, llvm::Value *Metadata);
+  llvm::Value *RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized, bool OwnPixel = false);
+  llvm::Value *RateMapTexelTable(llvm::Value *Address);
+  // A temp register known to hold int(SV_Position.xy) within the current block.
+  uint32_t pixel_coord_temp = ~0u;
+  void ResetBlockState() { pixel_coord_temp = ~0u; }
+  llvm::Value *RateMapTexel(llvm::Value *Address, llvm::Value *Metadata, bool OwnPixel = false);
   llvm::Value *RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata);
 
   llvm::Value *

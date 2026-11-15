@@ -178,6 +178,9 @@ struct io_binding_map {
   llvm::AllocaInst *depth_output_reg = nullptr;
   llvm::AllocaInst *stencil_ref_reg = nullptr;
   llvm::AllocaInst *coverage_mask_reg = nullptr;
+  // Pixel stage with rate-map position translation: SV_Position before translation.
+  llvm::Value *rate_map_raw_position = nullptr;
+  uint32_t rate_map_position_reg = ~0u;
 
   // special buffers for tessellation
   llvm::Type *hull_cp_passthrough_type = nullptr;

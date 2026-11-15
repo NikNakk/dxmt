@@ -755,6 +755,7 @@ public:
                                             OwnershipWaitDiagnostics::Present);
     if (SyncInterval > 4)
       return DXGI_ERROR_INVALID_CALL;
+    device_context_->DebugDumpExternalTarget();
 
     HRESULT hr = S_OK;
     bool window_minimized = wsi::isMinimized(hWnd);

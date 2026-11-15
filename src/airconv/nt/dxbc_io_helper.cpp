@@ -170,6 +170,9 @@ IOHelper::InitializeInput(
     // physical position in a rate-mapped pass back to its logical position through the
     // inverse lookup table. A zero-width table header leaves ordinary passes unchanged.
     if (rate_map_argument != ~0u && fix_w_component) {
+      // The untranslated position, for passes that read at their own pixel.
+      io.rate_map_raw_position = arg;
+      io.rate_map_position_reg = to_reg;
       auto lut = function->getArg(rate_map_argument);
       auto load = [&](llvm::Value *index) {
         return ir.CreateLoad(types._float, ir.CreateGEP(types._float, lut, index));

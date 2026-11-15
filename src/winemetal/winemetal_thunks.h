@@ -473,6 +473,11 @@ struct unixcall_base_foveation {
   uint32_t width, height;
   struct WMTBaseFoveation result;
 };
+
+struct unixcall_stereo_rate_map {
+  obj_handle_t device, ret;
+  uint32_t width, height, rate_percent;
+};
 #pragma pack(pop)
 
 #endif

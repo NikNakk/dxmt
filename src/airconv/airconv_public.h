@@ -241,7 +241,7 @@ enum SM50_SHADER_FLAG {
   SM50_SHADER_FLAG_DEFUSE_FMA = 1 << 1,
   SM50_SHADER_FLAG_RATE_MAP_POSITION = 1 << 2,
   // Separate bit so variants cached before read translation are never reused.
-  SM50_SHADER_FLAG_RATE_MAP_READ = 1 << 4, // bit 3 was the branchless prototype
+  SM50_SHADER_FLAG_RATE_MAP_READ = 1 << 6, // bits 3 to 5 were earlier prototypes
 };
 
 struct SM50_SHADER_COMMON_DATA {

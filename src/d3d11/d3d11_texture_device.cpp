@@ -776,6 +776,7 @@ ImportNativeTextureObject(MTLD3D11Device *device, uint64_t object,
   auto texture = Rc<Texture>(new Texture(info, device->GetMTLDevice()));
   auto allocation = texture->importNativeObject(object);
   if (!allocation) return E_INVALIDARG;
+  texture->external_storage = true;
   texture->rename(std::move(allocation));
   Com<DeviceTexture<tag_texture_2d>> resource = ref(new DeviceTexture<tag_texture_2d>(
       &final_desc, std::move(texture), device));

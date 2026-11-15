@@ -93,6 +93,7 @@ llvm::Expected<llvm::BasicBlock *> convert_basicblocks(
   auto bb_pop = builder.GetInsertBlock();
   for (auto &[current, bb] : visit_order) {
     builder.SetInsertPoint(bb);
+    dxbc.ResetBlockState();
 
     current->instructions.for_each(dxbc);
 
