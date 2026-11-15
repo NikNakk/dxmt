@@ -1205,9 +1205,15 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
             unsigned(data->colors[i].slice), unsigned(data->colors[i].load_action), unsigned(data->colors[i].store_action));
       }
       static const bool position_mode=env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1";
+      // Explicit-map attachment experiment only. Automatic profiles still reject depth/MSAA.
+      static const bool attachment_probe=env::getEnvVar("DXMT_RATE_MAP_ATTACHMENT_PROBE")=="1";
+      const bool attachment_supported=(!data->depth.attachment && !data->stencil.attachment &&
+          data->tile_barrier_pso_key.raster_sample_count==1) ||
+          (attachment_probe && data->depth.attachment && !data->stencil.attachment &&
+           data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float &&
+           (data->tile_barrier_pso_key.raster_sample_count==2 || data->tile_barrier_pso_key.raster_sample_count==4));
       const bool mapped_position=position_mode && data->rate_map_positions &&
-          data->render_target_count==1 && !data->depth.attachment && !data->stencil.attachment &&
-          data->tile_barrier_pso_key.raster_sample_count==1 && data->render_target_array_length<=1 &&
+          data->render_target_count==1 && attachment_supported && data->render_target_array_length<=1 &&
           data->render_target_width==data->rate_map_logical_size.width && data->render_target_height==data->rate_map_logical_size.height;
       if(position_mode && !mapped_position) render_pass_info.rasterization_rate_map=0;
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
