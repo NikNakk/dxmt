@@ -348,9 +348,16 @@ llvm::Error convert_dxbc_pixel_shader(
 
   io_binding_map resource_map;
   air::AirType types(context);
+  uint32_t rate_map_read_argument = ~0u;
 
   {
     SignatureContext sig_ctx(prologue, epilogue, func_signature, resource_map);
+    if(shader_flags & SM50_SHADER_FLAG_RATE_MAP_READ) {
+      rate_map_read_argument=func_signature.DefineInput(air::ArgumentBindingBuffer{
+          .buffer_size={}, .location_index=SM50_BINDING_INDEX_RATE_MAP_READ, .array_size=0,
+          .memory_access=air::MemoryAccess::read, .address_space=air::AddressSpace::constant,
+          .type=air::MSLFloat{}, .arg_name="rate_map_read_positions", .raster_order_group={}});
+    }
     if(shader_flags & SM50_SHADER_FLAG_RATE_MAP_POSITION) {
       sig_ctx.rate_map_position_argument=func_signature.DefineInput(air::ArgumentBindingBuffer{
           .buffer_size={}, .location_index=SM50_BINDING_INDEX_RATE_MAP_POSITION, .array_size=0,
@@ -432,6 +439,7 @@ llvm::Error convert_dxbc_pixel_shader(
       .pso_sample_mask = pso_sample_mask,
       .shader_type = pShaderInternal->shader_type,
       .metal_version = metal_version,
+      .rate_map_read_argument = rate_map_read_argument,
   };
 
   IOHelper io(air, function, types, resource_map);

@@ -59,13 +59,14 @@ _MTLDevice_rateMapInversePositions(void *args) {
   if(!map || ![map respondsToSelector:@selector(screenSize)] || map.device!=(id<MTLDevice>)p->device || map.layerCount!=1)
     return STATUS_SUCCESS;
   MTLSize logical=map.screenSize, physical=[map physicalSizeForLayer:0];
-  if(!physical.width || !physical.height || physical.width>16384 || physical.height>16384) return STATUS_SUCCESS;
+  if(!physical.width || !physical.height || physical.width>16384 || physical.height>16384 ||
+      !logical.width || !logical.height || logical.width>16384 || logical.height>16384) return STATUS_SUCCESS;
   p->logical_size=(struct WMTSize){logical.width,logical.height,1};
   static char cache_key;
   @synchronized((id)map) {
     id<MTLBuffer> buffer=objc_getAssociatedObject((id)map,&cache_key);
     if(!buffer) {
-      buffer=[map.device newBufferWithLength:(4+physical.width+physical.height)*sizeof(float) options:MTLResourceStorageModeShared];
+      buffer=[map.device newBufferWithLength:(4+physical.width+physical.height+logical.width+logical.height+2)*sizeof(float) options:MTLResourceStorageModeShared];
       if(!buffer) return STATUS_SUCCESS;
       float *values=buffer.contents;
       values[0]=physical.width;values[1]=physical.height;values[2]=logical.width;values[3]=logical.height;
@@ -73,6 +74,14 @@ _MTLDevice_rateMapInversePositions(void *args) {
         values[4+i]=[map mapPhysicalToScreenCoordinates:MTLCoordinate2DMake(i+.5f,.5f) forLayer:0].x;
       for(NSUInteger i=0;i<physical.height;++i)
         values[4+physical.width+i]=[map mapPhysicalToScreenCoordinates:MTLCoordinate2DMake(.5f,i+.5f) forLayer:0].y;
+      // Forward tables for shader reads of targets left in this map's layout:
+      // physical coordinate of each logical pixel boundary, per axis.
+      float *forward=values+4+physical.width+physical.height;
+      for(NSUInteger i=0;i<=logical.width;++i)
+        forward[i]=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(i,.5f) forLayer:0].x;
+      forward+=logical.width+1;
+      for(NSUInteger i=0;i<=logical.height;++i)
+        forward[i]=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(.5f,i) forLayer:0].y;
       objc_setAssociatedObject((id)map,&cache_key,(id)buffer,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
       [buffer release];
     }

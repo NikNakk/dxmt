@@ -4591,6 +4591,12 @@ public:
           if (rtvs.size() == 1 && !dsv.Texture && rtv.Texture->rasterization_rate_map)
             info.rasterization_rate_map = rtv.Texture->rasterization_rate_map;
           if(base_candidate) { info.base_foveation_target=rtv.Texture;info.base_foveation_view=rtv.viewId; }
+          static const bool rate_map_read=env::getEnvVar("DXMT_RATE_MAP_READ")=="1";
+          if(rate_map_read) {
+            // endPass decides whether this target ends up in mapped layout.
+            if(rtvs.size()==1) info.rate_map_target=rtv.Texture;
+            else rtv.Texture->rate_map_layout={};
+          }
           color.depth_plane = rtv.DepthPlane;
           color.load_action = WMTLoadActionLoad;
           color.store_action = WMTStoreActionStore;
@@ -4598,6 +4604,8 @@ public:
         };
 
         if (dsv.Texture.ptr()) {
+          static const bool rate_map_read_depth=env::getEnvVar("DXMT_RATE_MAP_READ")=="1";
+          if(rate_map_read_depth) info.rate_map_depth_target=dsv.Texture;
           auto access_flag = ResourceAccess::Read;
           // TODO: ...should know more about store behavior (e.g. DiscardView)
           if (dsv_planar_flags & 1) {

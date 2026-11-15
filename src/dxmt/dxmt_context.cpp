@@ -366,7 +366,21 @@ ArgumentEncodingContext::encodeShaderResources(
               (unsigned long long)currentRenderEncoder()->id, (unsigned long long)currentFrameId(),
               unsigned(stage), unsigned(arg.SM50BindingSlot), srv.texture.ptr(), bound_view.allocation,
               (unsigned long long)bound_view.texture.handle, unsigned(viewIdChecked));
-          encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(srv.texture->arrayLength(viewIdChecked), 0);
+          uint32_t array_length = srv.texture->arrayLength(viewIdChecked);
+          if (stage == PipelineStage::Pixel && srv.texture->rate_map_layout) {
+            // One read layout per pass in this experiment; others stay untranslated.
+            auto render = currentRenderEncoder();
+            if (!render->rate_map_read)
+              render->rate_map_read = srv.texture->rate_map_layout;
+            if (render->rate_map_read.handle == srv.texture->rate_map_layout.handle)
+              array_length |= 0x80000000u;
+            else
+              WARN("Rate-map read: second layout in one pass left untranslated");
+            if (sceneTraceEnabled())
+              sceneTrace("rate_map_read encoder=%llu slot=%u translated=%u", (unsigned long long)render->id,
+                         unsigned(arg.SM50BindingSlot), unsigned(array_length >> 31));
+          }
+          encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(array_length, 0);
           makeResident<stage, kind>(srv.texture.ptr(), viewIdChecked);
         } else {
           encoded_buffer[arg.StructurePtrOffset] = 0;
@@ -534,6 +548,8 @@ ArgumentEncodingContext::resolveTexture(
 
   encoder_info->src = access(src, src_view, ResourceAccess::Read);
   encoder_info->dst = access(dst, dst_view, ResourceAccess::Write);
+  // A resolve is texel-for-texel, so the destination inherits the source's layout.
+  dst->rate_map_layout = src->rate_map_layout;
 
   endPass();
 };
@@ -743,6 +759,24 @@ ArgumentEncodingContext::prepareBaseFoveation(unsigned width, unsigned height) {
   return true;
 }
 
+// A render pass whose attachments end up in its rate map's physical layout.
+// Depth/MSAA only under the explicit attachment diagnostic.
+static bool
+rateMapLayoutPass(const RenderEncoderData *data) {
+  static const bool attachment_probe=env::getEnvVar("DXMT_RATE_MAP_ATTACHMENT_PROBE")=="1";
+  const bool attachment_supported=(!data->depth.attachment && !data->stencil.attachment &&
+      data->tile_barrier_pso_key.raster_sample_count==1) ||
+      (attachment_probe && data->depth.attachment &&
+       ((!data->stencil.attachment && data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float) ||
+        (data->depth.attachment==data->stencil.attachment && data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float_Stencil8)) &&
+       (data->tile_barrier_pso_key.raster_sample_count==1 || data->tile_barrier_pso_key.raster_sample_count==2 ||
+        data->tile_barrier_pso_key.raster_sample_count==4));
+  return data->rate_map_positions &&
+      (data->render_target_count==1 || (attachment_probe && data->render_target_count==0 && data->depth.attachment)) &&
+      attachment_supported && data->render_target_array_length<=1 &&
+      data->render_target_width==data->rate_map_logical_size.width && data->render_target_height==data->rate_map_logical_size.height;
+}
+
 void
 ArgumentEncodingContext::endPass() {
   assert(encoder_current);
@@ -771,6 +805,23 @@ ArgumentEncodingContext::endPass() {
         render->rasterization_rate_map=base_foveation_map;render->rate_map_positions=base_foveation_inverse;
         render->rate_map_logical_size=base_foveation_size;
       }
+    }
+  }
+  if(encoder_current->type==EncoderType::Render) {
+    auto render=static_cast<RenderEncoderData *>(encoder_current);
+    if(render->rate_map_target) {
+      // Same conditions as the mapped-position pass at encode time. Automatic
+      // base foveation restores ordinary layout itself.
+      const bool mapped=!base_target && rateMapLayoutPass(render);
+      render->rate_map_target->rate_map_layout=mapped ? render->rate_map_positions : WMT::Reference<WMT::Buffer>();
+      render->rate_map_target=nullptr;
+    }
+    if(render->rate_map_depth_target) {
+      // Depth and stencil share the texture. A mapped pass leaves it in mapped
+      // layout; an ordinary pass that can write either plane restores ordinary layout.
+      if(!base_target && rateMapLayoutPass(render)) render->rate_map_depth_target->rate_map_layout=render->rate_map_positions;
+      else if((render->dsv_readonly_flags&3)!=3) render->rate_map_depth_target->rate_map_layout={};
+      render->rate_map_depth_target=nullptr;
     }
   }
   encoder_last->next = encoder_current;
@@ -1257,18 +1308,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
             unsigned(data->colors[i].slice), unsigned(data->colors[i].load_action), unsigned(data->colors[i].store_action));
       }
       static const bool position_mode=env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1";
-      // Explicit-map attachment experiment only. Automatic profiles still reject depth/MSAA.
-      static const bool attachment_probe=env::getEnvVar("DXMT_RATE_MAP_ATTACHMENT_PROBE")=="1";
-      const bool attachment_supported=(!data->depth.attachment && !data->stencil.attachment &&
-          data->tile_barrier_pso_key.raster_sample_count==1) ||
-          (attachment_probe && data->depth.attachment &&
-           ((!data->stencil.attachment && data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float) ||
-            (data->depth.attachment==data->stencil.attachment && data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float_Stencil8)) &&
-           (data->tile_barrier_pso_key.raster_sample_count==2 || data->tile_barrier_pso_key.raster_sample_count==4));
-      const bool mapped_position=position_mode && data->rate_map_positions &&
-          (data->render_target_count==1 || (attachment_probe && data->render_target_count==0 && data->depth.attachment)) &&
-          attachment_supported && data->render_target_array_length<=1 &&
-          data->render_target_width==data->rate_map_logical_size.width && data->render_target_height==data->rate_map_logical_size.height;
+      const bool mapped_position=position_mode && rateMapLayoutPass(data);
       if(position_mode && !mapped_position) render_pass_info.rasterization_rate_map=0;
       if(tbdr_audit.active){
         tbdr_audit.mapped_render+=render_pass_info.rasterization_rate_map!=0;
@@ -1301,6 +1341,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
       if (data->use_emulated_so)
         encoder.setVertexBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_STREAM_OUTPUT0);
       if(position_mode) encoder.setFragmentBuffer(mapped_position ? WMT::Buffer(data->rate_map_positions) : WMT::Buffer(dummy_cbuffer_),0,SM50_BINDING_INDEX_RATE_MAP_POSITION);
+      if(position_mode) encoder.setFragmentBuffer(data->rate_map_read ? WMT::Buffer(data->rate_map_read) : WMT::Buffer(dummy_cbuffer_),0,SM50_BINDING_INDEX_RATE_MAP_READ);
       encoder.setFragmentBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_CONSTANT_BUFFER);
       encoder.setFragmentBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_ARGUMENT_TABLE);
       if (data->use_geometry || data->use_tessellation) {
@@ -1834,6 +1875,7 @@ ArgumentEncodingContext::isEncoderSignatureMatched(RenderEncoderData *r0, Render
   if (r0->rasterization_rate_map.handle != r1->rasterization_rate_map.handle)
     return reject(tbdr_audit.merge_map);
   if(r0->rate_map_positions.handle!=r1->rate_map_positions.handle) return reject(tbdr_audit.merge_map);
+  if(r0->rate_map_read.handle!=r1->rate_map_read.handle) return reject(tbdr_audit.merge_map);
   // FIXME: it can be different?
   if (r0->render_target_count != r1->render_target_count)
     return reject(tbdr_audit.merge_layout);

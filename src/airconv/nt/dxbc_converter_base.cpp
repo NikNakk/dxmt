@@ -1418,6 +1418,17 @@ Converter::operator()(const InstLoad &load) {
   if (!Offset->isNullValue())
     Address = ir.CreateAdd(Address, Offset);
 
+  switch (Tex->Logical) {
+  case Texture::texture2d:
+  case Texture::depth2d:
+  case Texture::texture2d_ms:
+  case Texture::depth_2d_ms:
+    Address = RateMapTexel(Address, Tex->Metadata);
+    break;
+  default:
+    break;
+  }
+
   if (OOB)
     Address = ir.CreateSelect(OOB, llvm::ConstantInt::getAllOnesValue(Address->getType()), Address);
 
@@ -1527,6 +1538,96 @@ Converter::operator()(const InstStoreUAVTyped &store) {
 }
 
 llvm::Value *
+Converter::RateMapMapped(llvm::Value *Metadata) {
+  if (ctx.rate_map_read_argument == ~0u)
+    return nullptr;
+  return ir.CreateICmpSLT(Metadata, llvm::ConstantInt::get(Metadata->getType(), 0));
+}
+
+// Logical pixel coordinates (or normalized coordinates) to the map's physical
+// layout. Buffer: physical w/h, logical w/h, inverse tables, then per-axis
+// physical positions of each logical pixel boundary. Only emitted inside the
+// mapped branch, so the dummy binding of an ordinary pass is never indexed.
+llvm::Value *
+Converter::RateMapPhysical(llvm::Value *Logical, bool Normalized) {
+  auto FloatTy = air.getFloatTy();
+  auto IntTy = air.getIntTy();
+  auto Table = ctx.function->getArg(ctx.rate_map_read_argument);
+  auto Load = [&](llvm::Value *Index) { return ir.CreateLoad(FloatTy, ir.CreateGEP(FloatTy, Table, Index)); };
+  auto Const = [&](float Value) { return llvm::ConstantFP::get(FloatTy, Value); };
+  auto Clamp = [&](llvm::Value *Value, llvm::Value *Low, llvm::Value *High) {
+    Value = ir.CreateSelect(ir.CreateFCmpOGT(Value, Low), Value, Low);
+    return ir.CreateSelect(ir.CreateFCmpOLT(Value, High), Value, High);
+  };
+  llvm::Value *Size[4];
+  for (unsigned i = 0; i < 4; i++)
+    Size[i] = Load(ir.getInt32(i));
+  llvm::Value *Base =
+      ir.CreateAdd(ir.getInt32(4), ir.CreateAdd(ir.CreateFPToUI(Size[0], IntTy), ir.CreateFPToUI(Size[1], IntTy)));
+  llvm::Value *Result = Logical;
+  for (unsigned Axis = 0; Axis < 2; Axis++) {
+    auto PhysicalSize = Size[Axis], LogicalSize = Size[2 + Axis];
+    llvm::Value *Position = ir.CreateExtractElement(Logical, Axis);
+    if (Normalized)
+      Position = ir.CreateFMul(Position, LogicalSize);
+    Position = Clamp(Position, Const(0), LogicalSize);
+    auto Cell = ir.CreateFPToUI(Clamp(Position, Const(0), ir.CreateFSub(LogicalSize, Const(1))), IntTy);
+    auto Fraction = ir.CreateFSub(Position, ir.CreateUIToFP(Cell, FloatTy));
+    auto Index = ir.CreateAdd(Base, Cell);
+    auto Low = Load(Index), High = Load(ir.CreateAdd(Index, ir.getInt32(1)));
+    llvm::Value *Physical = ir.CreateFAdd(Low, ir.CreateFMul(ir.CreateFSub(High, Low), Fraction));
+    // Stay inside the active physical region; the rest of the allocation is unused.
+    Physical = Clamp(Physical, Const(0.5f), ir.CreateFSub(PhysicalSize, Const(0.5f)));
+    if (Normalized) // mapped targets keep their logical-size allocation
+      Physical = ir.CreateFDiv(Physical, LogicalSize);
+    Result = ir.CreateInsertElement(Result, Physical, Axis);
+    Base = ir.CreateAdd(Base, ir.CreateAdd(ir.CreateFPToUI(LogicalSize, IntTy), ir.getInt32(1)));
+  }
+  return Result;
+}
+
+// A real branch: reads of ordinary textures pay one test of metadata they
+// already loaded. Block terminators are emitted at the builder's final
+// position, so splitting the current block here is safe.
+llvm::Value *
+Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized) {
+  auto Mapped = RateMapMapped(Metadata);
+  if (!Mapped)
+    return Original;
+  auto Entry = ir.GetInsertBlock();
+  auto Translate = llvm::BasicBlock::Create(ctx.llvm, "rate_map_read", ctx.function);
+  auto Join = llvm::BasicBlock::Create(ctx.llvm, "rate_map_read_join", ctx.function);
+  ir.CreateCondBr(Mapped, Translate, Join);
+  ir.SetInsertPoint(Translate);
+  llvm::Value *Translated;
+  if (Normalized) {
+    Translated = RateMapPhysical(Original, true);
+  } else {
+    auto Centre = ir.CreateFAdd(
+        ir.CreateSIToFP(Original, air.getFloatTy(2)), llvm::ConstantFP::get(air.getFloatTy(2), 0.5)
+    );
+    Translated = ir.CreateFPToUI(RateMapPhysical(Centre, false), air.getIntTy(2));
+  }
+  auto End = ir.GetInsertBlock();
+  ir.CreateBr(Join);
+  ir.SetInsertPoint(Join);
+  auto Result = ir.CreatePHI(Original->getType(), 2);
+  Result->addIncoming(Original, Entry);
+  Result->addIncoming(Translated, End);
+  return Result;
+}
+
+llvm::Value *
+Converter::RateMapTexel(llvm::Value *Address, llvm::Value *Metadata) {
+  return RateMapBranch(Address, Metadata, false);
+}
+
+llvm::Value *
+Converter::RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata) {
+  return RateMapBranch(Coord, Metadata, true);
+}
+
+llvm::Value *
 Converter::ClampArrayIndex(llvm::Value *ShaderValue, llvm::Value *Metadata) {
   using namespace llvm::air;
   auto rounded = air.CreateFPUnOp(AIRBuilder::rint, ShaderValue);
@@ -1573,6 +1674,7 @@ Converter::operator()(const InstSample &sample) {
   case Texture::depth2d:
   case Texture::texture2d:
     Coord = LoadOperand(sample.src_address, kMaskVecXY);
+    Coord = RateMapCoord(Coord, Tex->Metadata);
     break;
   case Texture::depth2d_array:
   case Texture::texture2d_array:
@@ -1638,6 +1740,7 @@ Converter::operator()(const InstSampleLOD &sample) {
   case Texture::depth2d:
   case Texture::texture2d:
     Coord = LoadOperand(sample.src_address, kMaskVecXY);
+    Coord = RateMapCoord(Coord, Tex->Metadata);
     break;
   case Texture::depth2d_array:
   case Texture::texture2d_array:

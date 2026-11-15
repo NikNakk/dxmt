@@ -192,6 +192,9 @@ struct RenderEncoderData : EncoderData {
   WMT::Reference<WMT::Object> rasterization_rate_map;
   WMT::Reference<WMT::Buffer> rate_map_positions;
   WMTSize rate_map_logical_size={};
+  // Stay-warped experiment: the single colour target, and the layout of mapped textures this pass reads.
+  Rc<Texture> rate_map_target, rate_map_depth_target;
+  WMT::Reference<WMT::Buffer> rate_map_read;
   std::array<RenderEncoderColorAttachmentData, 8> colors;
   RenderEncoderDepthAttachmentData depth;
   RenderEncoderStencilAttachmentData stencil;
