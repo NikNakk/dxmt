@@ -437,6 +437,8 @@ public:
     return D3D11_DEVICE_CONTEXT_DEFERRED;
   }
 
+  virtual void DebugDumpExternalTarget() override {}
+
   virtual void WaitUntilGPUIdle() override{
       // nop
   };

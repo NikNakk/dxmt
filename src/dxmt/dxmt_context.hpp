@@ -193,7 +193,9 @@ struct RenderEncoderData : EncoderData {
   WMT::Reference<WMT::Buffer> rate_map_positions;
   WMTSize rate_map_logical_size={};
   // Stay-warped experiment: the single colour target, and the layout of mapped textures this pass reads.
-  Rc<Texture> rate_map_target, rate_map_depth_target;
+  std::array<Rc<Texture>, 8> rate_map_targets;
+  Rc<Texture> rate_map_depth_target;
+  bool rate_map_excluded = false;
   WMT::Reference<WMT::Buffer> rate_map_read;
   std::array<RenderEncoderColorAttachmentData, 8> colors;
   RenderEncoderDepthAttachmentData depth;
@@ -224,6 +226,7 @@ struct RenderEncoderData : EncoderData {
 };
 
 struct ComputeEncoderData : EncoderData {
+  WMT::Reference<WMT::Buffer> rate_map_read;
   WMT::Reference<WMT::Buffer> base_foveation_forward;
   WMT::Reference<WMT::ComputePipelineState> base_foveation_pipeline;
 
@@ -729,6 +732,8 @@ public:
   WMTSize rate_map_logical_size={};
 
   TBDRAuditStats tbdr_audit;
+  bool stay_warped_ready = false;
+  void prepareStayWarped();
   WMT::Reference<WMT::Object> base_foveation_map;
   WMT::Reference<WMT::Buffer> base_foveation_forward, base_foveation_inverse;
   WMT::Reference<WMT::ComputePipelineState> base_foveation_pipeline;

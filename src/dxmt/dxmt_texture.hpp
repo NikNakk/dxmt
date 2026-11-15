@@ -286,6 +286,8 @@ public:
   WMT::Reference<WMT::Object> rasterization_rate_map;
   // Set while the contents are in a rate map's physical layout (DXMT_RATE_MAP_READ).
   WMT::Reference<WMT::Buffer> rate_map_layout;
+  // Imported native storage (an OpenXR swapchain image): something outside DXMT reads it.
+  bool external_storage = false;
   TextureViewKey fullView;
 
   Rc<TextureAllocation> allocate(Flags<TextureAllocationFlag> flags);

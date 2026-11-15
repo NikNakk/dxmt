@@ -1457,3 +1457,11 @@ MTLDevice_newBaseFoveation(obj_handle_t device, uint32_t width, uint32_t height,
   params.device=device;params.width=width;params.height=height;params.pipeline=pipeline;
   UNIX_CALL(157,&params); *result=params.result;
 }
+
+WINEMETAL_API obj_handle_t
+MTLDevice_newStereoRateMap(obj_handle_t device, uint32_t width, uint32_t height, uint32_t rate_percent) {
+  struct unixcall_stereo_rate_map params={0};
+  params.device=device;params.width=width;params.height=height;params.rate_percent=rate_percent;
+  UNIX_CALL(158,&params);
+  return params.ret;
+}

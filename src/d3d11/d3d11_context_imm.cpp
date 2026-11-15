@@ -713,6 +713,41 @@ public:
     return D3D11_DEVICE_CONTEXT_IMMEDIATE;
   }
 
+  // Diagnostic: DXMT_DEBUG_DUMP_PATH=Z:\\file.ppm writes the last rendered imported
+  // (swapchain) image on Present number DXMT_DEBUG_DUMP_FRAME. Blocks that one frame.
+  virtual void
+  DebugDumpExternalTarget() override {
+    static const auto path=env::getEnvVar("DXMT_DEBUG_DUMP_PATH");
+    if(path.empty()) return;
+    static const unsigned long frame=[]{auto v=env::getEnvVar("DXMT_DEBUG_DUMP_FRAME");return v.empty()?1200ul:std::strtoul(v.c_str(),nullptr,10);}();
+    static unsigned long presents=0;
+    if(++presents!=frame || !debug_dump_target_) return;
+    Com<ID3D11Texture2D> source;
+    if(FAILED(debug_dump_target_->QueryInterface(__uuidof(ID3D11Texture2D),reinterpret_cast<void **>(&source)))) return;
+    D3D11_TEXTURE2D_DESC desc={};source->GetDesc(&desc);
+    const bool bgra=desc.Format==DXGI_FORMAT_B8G8R8A8_UNORM || desc.Format==DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    if(!bgra && desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) return;
+    desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;desc.MiscFlags=0;desc.MipLevels=desc.ArraySize=1;
+    Com<ID3D11Texture2D> staging;
+    if(FAILED(m_parent->CreateTexture2D(&desc,nullptr,&staging))) return;
+    CopySubresourceRegion(staging.ptr(),0,0,0,0,source.ptr(),0,nullptr);
+    D3D11_MAPPED_SUBRESOURCE mapped={};
+    if(FAILED(Map(staging.ptr(),0,D3D11_MAP_READ,0,&mapped))) return;
+    if(auto file=std::fopen(path.c_str(),"wb")) {
+      std::fprintf(file,"P6\n%u %u\n255\n",desc.Width,desc.Height);
+      for(unsigned y=0;y<desc.Height;++y) {
+        auto row=static_cast<const unsigned char *>(mapped.pData)+size_t(y)*mapped.RowPitch;
+        for(unsigned x=0;x<desc.Width;++x) {
+          unsigned char rgb[3]={row[4*x+(bgra?2:0)],row[4*x+1],row[4*x+(bgra?0:2)]};
+          std::fwrite(rgb,1,3,file);
+        }
+      }
+      std::fclose(file);
+      Logger::info(str::format("DEBUG_DUMP wrote ",desc.Width,"x",desc.Height," present=",presents));
+    }
+    Unmap(staging.ptr(),0);
+  }
+
   virtual void
   WaitUntilGPUIdle() override {
     uint64_t seq = cmd_queue.CurrentSeqId();

@@ -218,6 +218,7 @@ IREffect init_input_reg(
     // The zero-header binding is identity for ordinary/unmapped render passes.
     if(rate_map_argument!=~0u && fix_w_component) {
       auto &b=ctx.builder;
+      ctx.resource.rate_map_raw_position=arg;ctx.resource.rate_map_position_reg=to_reg;
       auto lut=ctx.function->getArg(rate_map_argument);
       auto load=[&](llvm::Value *index) { return b.CreateLoad(ctx.types._float,b.CreateGEP(ctx.types._float,lut,index)); };
       auto width=load(b.getInt32(0));
@@ -552,6 +553,7 @@ llvm::Expected<llvm::BasicBlock *> convert_basicblocks(
   auto bb_pop = builder.GetInsertBlock();
   for (auto &[current, bb] : visit_order) {
     builder.SetInsertPoint(bb);
+    dxbc.ResetBlockState();
 
     current->instructions.for_each(dxbc);
 

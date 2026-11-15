@@ -66,7 +66,7 @@ _MTLDevice_rateMapInversePositions(void *args) {
   @synchronized((id)map) {
     id<MTLBuffer> buffer=objc_getAssociatedObject((id)map,&cache_key);
     if(!buffer) {
-      buffer=[map.device newBufferWithLength:(4+physical.width+physical.height+logical.width+logical.height+2)*sizeof(float) options:MTLResourceStorageModeShared];
+      buffer=[map.device newBufferWithLength:(4+physical.width+physical.height+2*(logical.width+logical.height)+2)*sizeof(float) options:MTLResourceStorageModeShared];
       if(!buffer) return STATUS_SUCCESS;
       float *values=buffer.contents;
       values[0]=physical.width;values[1]=physical.height;values[2]=logical.width;values[3]=logical.height;
@@ -82,6 +82,17 @@ _MTLDevice_rateMapInversePositions(void *args) {
       forward+=logical.width+1;
       for(NSUInteger i=0;i<=logical.height;++i)
         forward[i]=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(.5f,i) forLayer:0].y;
+      // Integer loads: the physical texel holding each logical pixel centre, per axis.
+      float *texel=forward+logical.height+1;
+      for(NSUInteger i=0;i<logical.width;++i) {
+        float p=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(i+.5f,.5f) forLayer:0].x;
+        texel[i]=fminf(fmaxf(floorf(p),0),physical.width-1);
+      }
+      texel+=logical.width;
+      for(NSUInteger i=0;i<logical.height;++i) {
+        float p=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(.5f,i+.5f) forLayer:0].y;
+        texel[i]=fminf(fmaxf(floorf(p),0),physical.height-1);
+      }
       objc_setAssociatedObject((id)map,&cache_key,(id)buffer,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
       [buffer release];
     }
@@ -91,6 +102,29 @@ _MTLDevice_rateMapInversePositions(void *args) {
 }
 
 // Bounded fixed-centre prototype; reuse the existing map/position transport.
+static NTSTATUS
+_MTLDevice_newStereoRateMap(void *args) {
+  struct unixcall_stereo_rate_map *p=args;
+  p->ret=0;
+  @autoreleasepool {
+    id<MTLDevice> device=(id<MTLDevice>)p->device;
+    if(!p->width || !p->height || p->width>16384 || p->height>16384 || p->rate_percent<10 || p->rate_percent>100 ||
+        ![device supportsRasterizationRateMapWithLayerCount:1]) return STATUS_SUCCESS;
+    float outer=p->rate_percent/100.f;
+    // Sixteen columns: eight per eye, the middle two of each at full rate. Eight rows.
+    MTLRasterizationRateLayerDescriptor *layer=[[MTLRasterizationRateLayerDescriptor alloc]
+        initWithSampleCount:MTLSizeMake(16,8,1)];
+    for(unsigned i=0;i<16;++i) layer.horizontal[i]=@(((i&7)==3 || (i&7)==4)?1.f:outer);
+    for(unsigned i=0;i<8;++i) layer.vertical[i]=@((i==3 || i==4)?1.f:outer);
+    MTLRasterizationRateMapDescriptor *desc=[MTLRasterizationRateMapDescriptor
+        rasterizationRateMapDescriptorWithScreenSize:MTLSizeMake(p->width,p->height,1) layer:layer];
+    id<MTLRasterizationRateMap> map=[device newRasterizationRateMapWithDescriptor:desc];
+    [layer release];
+    p->ret=(obj_handle_t)map;
+  }
+  return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 _MTLDevice_newBaseFoveation(void *args) {
   struct unixcall_base_foveation *p=args;
@@ -3872,6 +3906,7 @@ const void *__wine_unix_call_funcs[] = {
     &_MTLDevice_retainRasterizationRateMap,
     &_MTLDevice_rateMapInversePositions,
     &_MTLDevice_newBaseFoveation,
+    &_MTLDevice_newStereoRateMap,
 };
 
 #ifndef DXMT_NATIVE
@@ -4034,5 +4069,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_MTLDevice_retainRasterizationRateMap,
     &_MTLDevice_rateMapInversePositions,
     &_MTLDevice_newBaseFoveation,
+    &_MTLDevice_newStereoRateMap,
 };
 #endif

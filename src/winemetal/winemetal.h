@@ -2188,4 +2188,8 @@ struct WMTBaseFoveation { obj_handle_t map, forward, pipeline; struct WMTSize ph
 WINEMETAL_API void MTLDevice_newBaseFoveation(obj_handle_t device, uint32_t width, uint32_t height,
     obj_handle_t pipeline, struct WMTBaseFoveation *result);
 
+// Stay-warped experiment: fixed map for a double-wide stereo target, one full-rate
+// region centred in each half. rate_percent is the peripheral rate per axis. +1 ownership.
+WINEMETAL_API obj_handle_t MTLDevice_newStereoRateMap(obj_handle_t device, uint32_t width, uint32_t height, uint32_t rate_percent);
+
 #endif

@@ -3284,6 +3284,8 @@ public:
   GetDynamicBufferAllocation(Rc<DynamicBuffer> &dynamic);
 
   uint64_t *allocated_encoder_argbuf_size_ = nullptr;
+  // Diagnostic only (DXMT_DEBUG_DUMP_PATH): last imported texture bound as a render target.
+  Com<ID3D11Resource> debug_dump_target_;
 
   uint64_t PreAllocateArgumentBuffer(size_t size, size_t alignment) {
     assert(allocated_encoder_argbuf_size_ && "otherwise invalid call");
@@ -4482,6 +4484,10 @@ public:
         if (rtv) {
           auto props = rtv->description();
           rtvs[i] = {rtv->texture(), rtv->viewId(), i, props.DepthPlane, rtv->pixelFormat()};
+          static const bool debug_dump=!env::getEnvVar("DXMT_DEBUG_DUMP_PATH").empty();
+          if(debug_dump && rtvs[i].Texture->external_storage) {
+            debug_dump_target_=nullptr;rtv->GetResource(&debug_dump_target_);
+          }
           D3D11_ASSERT(rtv->pixelFormat() != WMTPixelFormatInvalid);
           effective_render_target++;
         } else {
@@ -4578,8 +4584,10 @@ public:
           static const bool rate_map_read=env::getEnvVar("DXMT_RATE_MAP_READ")=="1";
           if(rate_map_read) {
             // endPass decides whether this target ends up in mapped layout.
-            if(rtvs.size()==1) info.rate_map_target=rtv.Texture;
-            else rtv.Texture->rate_map_layout={};
+            info.rate_map_targets[rtv.RenderTargetIndex]=rtv.Texture;
+            static const bool stay_warped=!env::getEnvVar("DXMT_STAY_WARPED").empty();
+            // The compositor reads swapchain images outside DXMT: keep that pass ordinary.
+            if(stay_warped && rtv.Texture->external_storage) info.rate_map_excluded=true;
           }
           color.depth_plane = rtv.DepthPlane;
           color.load_action = WMTLoadActionLoad;
