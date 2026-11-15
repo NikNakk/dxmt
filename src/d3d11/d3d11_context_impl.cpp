@@ -3343,6 +3343,8 @@ public:
       auto ArgumentTableQwords = reflection->ArgumentTableQwords;
       auto offset = PreAllocateArgumentBuffer(ArgumentTableQwords << 3, 32);
       EmitST([=, arg = managed_shader->arguments_info()](ArgumentEncodingContext &enc) {
+        if (layoutAuditFrame(enc.currentFrameId()))
+          enc.layoutAuditShader(unsigned(stage), managed_shader->sha1().string().c_str());
         enc.encodeShaderResources<stage, kind>(reflection, arg, offset);
       });
       ShaderStage.Samplers.clear_dirty();

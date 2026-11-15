@@ -396,6 +396,12 @@ public:
         (unsigned long long)(encoder_current ? encoder_current->id : 0), unsigned(stage), flags,
         texture.ptr(), allocation, (unsigned long long)allocation->texture().handle, texture->width(), texture->height(),
         unsigned(texture->pixelFormat()), texture->sampleCount(), texture->arrayLength(), level, slice);
+    if (layoutAuditFrame(currentFrameId()))
+      layoutAudit("access frame=%llu encoder=%llu type=%u stage=%u flags=%d resource=%p width=%u height=%u format=%u samples=%u layers=%u mips=%u",
+          (unsigned long long)currentFrameId(), (unsigned long long)(encoder_current ? encoder_current->id : 0),
+          unsigned(encoder_current ? encoder_current->type : EncoderType::Null), unsigned(stage), flags, texture.ptr(),
+          texture->width(), texture->height(), unsigned(texture->pixelFormat()), texture->sampleCount(),
+          texture->arrayLength(), texture->miplevelCount());
     return allocation->texture();
   }
 
@@ -423,6 +429,12 @@ public:
         (unsigned long long)(encoder_current ? encoder_current->id : 0), unsigned(stage), flags,
         texture.ptr(), allocation, (unsigned long long)view.texture.handle, texture->width(), texture->height(),
         unsigned(texture->pixelFormat()), texture->sampleCount(), texture->arrayLength(), (unsigned long long)viewId);
+    if (layoutAuditFrame(currentFrameId()))
+      layoutAudit("access frame=%llu encoder=%llu type=%u stage=%u flags=%d resource=%p width=%u height=%u format=%u samples=%u layers=%u mips=%u",
+          (unsigned long long)currentFrameId(), (unsigned long long)(encoder_current ? encoder_current->id : 0),
+          unsigned(encoder_current ? encoder_current->type : EncoderType::Null), unsigned(stage), flags, texture.ptr(),
+          texture->width(), texture->height(), unsigned(texture->pixelFormat()), texture->sampleCount(),
+          texture->arrayLength(), texture->miplevelCount());
     return view;
   }
 
@@ -809,6 +821,11 @@ public:
   uint64_t currentSeqId() {return seq_id_;}
 
   uint64_t currentFrameId() {return frame_id_;}
+  // Precedes the bind rows of one shader's argument table.
+  void layoutAuditShader(unsigned stage, const char *sha1) {
+    layoutAudit("shader frame=%llu encoder=%llu stage=%u sha1=%s", (unsigned long long)frame_id_,
+                (unsigned long long)(encoder_current ? encoder_current->id : 0), stage, sha1);
+  }
 
   CommandQueue& queue() { return queue_;}
 

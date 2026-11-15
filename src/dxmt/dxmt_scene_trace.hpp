@@ -27,4 +27,24 @@ inline void sceneTrace(const char *format, ...) {
   va_list args; va_start(args, format); std::vsnprintf(row, sizeof(row), format, args); va_end(args);
   Logger::info(std::string("SCENE ") + row);
 }
+// Passive layout audit: every texture access in a window of Present frames,
+// with the encoder kind, so readers outside pixel shaders can be found.
+inline bool layoutAuditFrame(uint64_t frame) {
+  static const bool enabled = env::getEnvVar("DXMT_LAYOUT_AUDIT") == "1";
+  if (!enabled) return false;
+  static const auto number = [](const char *name, unsigned long fallback) {
+    auto value = env::getEnvVar(name);
+    if (value.empty()) return fallback;
+    char *end = nullptr; auto n = std::strtoul(value.c_str(), &end, 10);
+    return end && !*end ? n : fallback;
+  };
+  static const unsigned long start = number("DXMT_LAYOUT_AUDIT_START_FRAME", 1200);
+  static const unsigned long count = number("DXMT_LAYOUT_AUDIT_FRAME_COUNT", 2);
+  return frame >= start && frame < start + count;
+}
+inline void layoutAudit(const char *format, ...) {
+  char row[1024];
+  va_list args; va_start(args, format); std::vsnprintf(row, sizeof(row), format, args); va_end(args);
+  Logger::info(std::string("LAYOUT ") + row);
+}
 }

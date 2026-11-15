@@ -381,6 +381,9 @@ ArgumentEncodingContext::encodeShaderResources(
                          unsigned(arg.SM50BindingSlot), unsigned(array_length >> 31));
           }
           encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(array_length, 0);
+          if (layoutAuditFrame(currentFrameId()))
+            layoutAudit("bind frame=%llu encoder=%llu stage=%u kind=srv slot=%u resource=%p", (unsigned long long)currentFrameId(),
+                        (unsigned long long)(encoder_current ? encoder_current->id : 0), unsigned(stage), unsigned(arg.SM50BindingSlot), srv.texture.ptr());
           makeResident<stage, kind>(srv.texture.ptr(), viewIdChecked);
         } else {
           encoded_buffer[arg.StructurePtrOffset] = 0;
@@ -420,6 +423,9 @@ ArgumentEncodingContext::encodeShaderResources(
           auto viewIdChecked = uav.texture->checkViewUseArray(uav.viewId, arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY);
           encoded_buffer[arg.StructurePtrOffset] = access<stage>(uav.texture, viewIdChecked, access_flags).gpuResourceID;
           encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(uav.texture->arrayLength(viewIdChecked), 0);
+          if (layoutAuditFrame(currentFrameId()))
+            layoutAudit("bind frame=%llu encoder=%llu stage=%u kind=uav slot=%u resource=%p", (unsigned long long)currentFrameId(),
+                        (unsigned long long)(encoder_current ? encoder_current->id : 0), unsigned(stage), unsigned(arg.SM50BindingSlot), uav.texture.ptr());
           makeResident<stage, kind>(uav.texture.ptr(), viewIdChecked, read, write);
         } else {
           encoded_buffer[arg.StructurePtrOffset] = 0;
@@ -806,6 +812,12 @@ ArgumentEncodingContext::endPass() {
         render->rate_map_logical_size=base_foveation_size;
       }
     }
+  }
+  if(encoder_current->type==EncoderType::Render && layoutAuditFrame(currentFrameId())) {
+    auto render=static_cast<RenderEncoderData *>(encoder_current);
+    layoutAudit("pass frame=%llu encoder=%llu width=%u height=%u colors=%u samples=%u depth=%u",(unsigned long long)currentFrameId(),
+        (unsigned long long)render->id,render->render_target_width,render->render_target_height,unsigned(render->render_target_count),
+        unsigned(render->tile_barrier_pso_key.raster_sample_count),unsigned(bool(render->depth.attachment)));
   }
   if(encoder_current->type==EncoderType::Render) {
     auto render=static_cast<RenderEncoderData *>(encoder_current);
