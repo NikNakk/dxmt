@@ -742,10 +742,12 @@ public:
     D3D11_TEXTURE2D_DESC desc={};source->GetDesc(&desc);
     const bool bgra=desc.Format==DXGI_FORMAT_B8G8R8A8_UNORM || desc.Format==DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
     if(!bgra && desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM && desc.Format!=DXGI_FORMAT_R8G8B8A8_UNORM_SRGB) return;
+    static const unsigned dump_slice=unsigned(std::strtoul(env::getEnvVar("DXMT_DEBUG_DUMP_SLICE").c_str(),nullptr,10));
+    const unsigned dump_subresource=dump_slice<desc.ArraySize ? dump_slice*desc.MipLevels : 0;
     desc.Usage=D3D11_USAGE_STAGING;desc.BindFlags=0;desc.CPUAccessFlags=D3D11_CPU_ACCESS_READ;desc.MiscFlags=0;desc.MipLevels=desc.ArraySize=1;
     Com<ID3D11Texture2D> staging;
     if(FAILED(m_parent->CreateTexture2D(&desc,nullptr,&staging))) return;
-    CopySubresourceRegion(staging.ptr(),0,0,0,0,source.ptr(),0,nullptr);
+    CopySubresourceRegion(staging.ptr(),0,0,0,0,source.ptr(),dump_subresource,nullptr);
     D3D11_MAPPED_SUBRESOURCE mapped={};
     if(FAILED(Map(staging.ptr(),0,D3D11_MAP_READ,0,&mapped))) return;
     if(auto file=std::fopen(path.c_str(),"wb")) {
