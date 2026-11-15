@@ -31,6 +31,7 @@
 #include "dxmt_scaler.hpp"
 #include "dxmt_statistics.hpp"
 #include "dxmt_texture.hpp"
+#include "dxmt_scene_trace.hpp"
 #include "log/log.hpp"
 #include "rc/util_rc_ptr.hpp"
 #include "airconv_public.h"
@@ -379,6 +380,10 @@ public:
         track<stage>(tracker, flags);
       }
     }
+    sceneTrace("access encoder=%llu stage=%u flags=%d resource=%p allocation=%p native=%llx width=%u height=%u format=%u samples=%u layers=%u level=%u slice=%u",
+        (unsigned long long)(encoder_current ? encoder_current->id : 0), unsigned(stage), flags,
+        texture.ptr(), allocation, (unsigned long long)allocation->texture().handle, texture->width(), texture->height(),
+        unsigned(texture->pixelFormat()), texture->sampleCount(), texture->arrayLength(), level, slice);
     return allocation->texture();
   }
 
@@ -402,6 +407,10 @@ public:
         }
       }
     }
+    sceneTrace("access encoder=%llu stage=%u flags=%d resource=%p allocation=%p native=%llx width=%u height=%u format=%u samples=%u layers=%u view=%llx",
+        (unsigned long long)(encoder_current ? encoder_current->id : 0), unsigned(stage), flags,
+        texture.ptr(), allocation, (unsigned long long)view.texture.handle, texture->width(), texture->height(),
+        unsigned(texture->pixelFormat()), texture->sampleCount(), texture->arrayLength(), (unsigned long long)viewId);
     return view;
   }
 

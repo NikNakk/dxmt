@@ -588,6 +588,10 @@ ArgumentEncodingContext::upscaleTemporal(
   if (exposure) {
     encoder_info->exposure = access(exposure, exposure->fullView, ResourceAccess::Read).texture;
   }
+  sceneTrace("upscale encoder=%llu input=%llx depth=%llx motion=%llx output=%llx content_width=%u content_height=%u",
+      (unsigned long long)encoder_info->id, (unsigned long long)encoder_info->input.handle,
+      (unsigned long long)encoder_info->depth.handle, (unsigned long long)encoder_info->motion_vector.handle,
+      (unsigned long long)encoder_info->output.handle, props.input_content_width, props.input_content_height);
   endPass();
 }
 
@@ -1111,6 +1115,20 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         render_pass_info.visibility_buffer = readbacks.visibility->visibility_result_heap;
       }
       auto gpu_buffer_ = data->allocated_argbuf;
+      if (sceneTraceEnabled()) {
+      sceneTrace("render encoder=%llu command_buffer=%llu width=%u height=%u layers=%u colors=%u samples=%u depth=%llx stencil=%llx map=%llx pso=%llx label=%s",
+          (unsigned long long)data->id, (unsigned long long)seqId, data->render_target_width, data->render_target_height,
+          unsigned(data->render_target_array_length), unsigned(data->render_target_count),
+          unsigned(data->tile_barrier_pso_key.raster_sample_count), (unsigned long long)render_pass_info.depth.texture,
+          (unsigned long long)render_pass_info.stencil.texture, (unsigned long long)render_pass_info.rasterization_rate_map,
+          (unsigned long long)data->last_pso.handle, renderLabel(data).c_str());
+      for (unsigned i=0;i<8;++i) if (data->colors[i].attachment)
+        sceneTrace("attachment encoder=%llu slot=%u native=%llx resolve=%llx format=%u level=%u slice=%u load=%u store=%u",
+            (unsigned long long)data->id, i, (unsigned long long)render_pass_info.colors[i].texture,
+            (unsigned long long)render_pass_info.colors[i].resolve_texture,
+            unsigned(data->tile_barrier_pso_key.color_formats[i]), unsigned(data->colors[i].level),
+            unsigned(data->colors[i].slice), unsigned(data->colors[i].load_action), unsigned(data->colors[i].store_action));
+      }
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
       if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(renderLabel(data).c_str(), WMTUTF8StringEncoding));
