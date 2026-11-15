@@ -48,12 +48,13 @@ template <typename Proc>
 class GeneralShaderCompileTask : public CompiledShader {
 public:
   GeneralShaderCompileTask(MTLD3D11Device *pDevice, ManagedShader shader,
-                           Proc &&proc, std::string func_name, const Sha1Digest& variant_digest)
+                           Proc &&proc, std::string func_name, const Sha1Digest& variant_digest,
+                           SM50_SHADER_FLAG flags = getGlobalShaderFlag())
       : CompiledShader(), proc(std::forward<Proc>(proc)), func_name(func_name), device_(pDevice),
         shader_(shader), variant_digest_(variant_digest) {
     sm50_common.type = SM50_SHADER_COMMON;
     sm50_common.metal_version = (SM50_SHADER_METAL_VERSION)pDevice->GetDXMTDevice().metalVersion();
-    sm50_common.flags = getGlobalShaderFlag();
+    sm50_common.flags = flags;
     sm50_common.next = nullptr;
   }
 
@@ -189,7 +190,10 @@ std::unique_ptr<CompiledShader>
 CreateVariantShader(MTLD3D11Device *pDevice, ManagedShader shader,
                     ShaderVariantPixel variant) {
   Sha1HashState h;
-  h.update(getGlobalShaderFlag());
+  auto flags = getGlobalShaderFlag();
+  if (!variant.rate_map_read)
+    flags = SM50_SHADER_FLAG(unsigned(flags) & ~unsigned(SM50_SHADER_FLAG_RATE_MAP_READ));
+  h.update(flags);
   h.update(variant.sample_mask);
   h.update(variant.unorm_output_reg_mask);
   h.update(variant.dual_source_blending);
@@ -219,7 +223,7 @@ CreateVariantShader(MTLD3D11Device *pDevice, ManagedShader shader,
     return compile_result;
   };
   return std::make_unique<GeneralShaderCompileTask<decltype(proc)>>(
-      pDevice, shader, std::move(proc), func_name, variant_digest);
+      pDevice, shader, std::move(proc), func_name, variant_digest, flags);
 };
 
 template <>

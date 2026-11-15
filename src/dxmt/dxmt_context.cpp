@@ -1378,6 +1378,25 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
         }
         if(tbdrAuditDetailRow())tbdrAuditLog("render seq=%llu frame=%llu encoder=%llu label=%s",(unsigned long long)seqId,(unsigned long long)currentFrameId(),(unsigned long long)data->id,renderLabel(data).c_str());
       }
+      // Whole-pass selection is conservative: one mapped read keeps every translated
+      // shader in the pass. This also handles SRV changes after the first PSO bind.
+      if (!data->no_read_pipelines.empty()) {
+        for (auto cmd = reinterpret_cast<wmtcmd_base *>(&data->cmd_head); cmd;
+             cmd = reinterpret_cast<wmtcmd_base *>(cmd->next.get())) {
+          if (cmd->type != WMTRenderCommandSetPSO) continue;
+          auto set = reinterpret_cast<wmtcmd_render_setpso *>(cmd);
+          for (const auto &pair : data->no_read_pipelines) {
+            if (set->pso != pair.first.handle) continue;
+            if (!data->rate_map_read) {
+              set->pso = pair.second;
+              if (tbdr_audit.active) ++tbdr_audit.read_ordinary;
+            } else if (tbdr_audit.active) {
+              ++tbdr_audit.read_capable;
+            }
+            break;
+          }
+        }
+      }
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
       if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(renderLabel(data).c_str(), WMTUTF8StringEncoding));
@@ -1860,6 +1879,8 @@ ArgumentEncodingContext::checkEncoderRelation(EncoderData *former, EncoderData *
         r0->cmd_head.next.set(nullptr);
         r0->cmd_tail = (wmtcmd_base *)&r0->cmd_head;
       }
+      r1->no_read_pipelines.insert(r1->no_read_pipelines.end(),
+                                  r0->no_read_pipelines.begin(), r0->no_read_pipelines.end());
       r1->use_tessellation = r0->use_tessellation || r1->use_tessellation;
       r1->use_geometry = r0->use_geometry || r1->use_geometry;
       r1->use_emulated_so = r0->use_emulated_so || r1->use_emulated_so;

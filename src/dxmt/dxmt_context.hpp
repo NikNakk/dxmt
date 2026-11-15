@@ -223,6 +223,8 @@ struct RenderEncoderData : EncoderData {
   bool use_emulated_so = 0;
   TileBarrierPSOKey tile_barrier_pso_key = {};
   WMT::RenderPipelineState last_pso = {};
+  // Pipeline cache owns both handles. Decide after all resource bindings and pass merging.
+  std::vector<std::pair<WMT::RenderPipelineState, WMT::RenderPipelineState>> no_read_pipelines;
 };
 
 struct ComputeEncoderData : EncoderData {
