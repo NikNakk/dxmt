@@ -748,11 +748,17 @@ ImportNativeTextureObject(MTLD3D11Device *device, uint64_t object,
                           const D3D11_TEXTURE2D_DESC *desc, ID3D11Texture2D **out) {
   if (!out) return E_POINTER;
   *out = nullptr;
+  static const bool attachment_probe=env::getEnvVar("DXMT_RATE_MAP_ATTACHMENT_PROBE")=="1";
+  const bool probe_texture=attachment_probe && desc && desc->ArraySize==1 &&
+      (desc->SampleDesc.Count==2 || desc->SampleDesc.Count==4) &&
+      (desc->Format==DXGI_FORMAT_R8G8B8A8_UNORM || desc->Format==DXGI_FORMAT_R32_TYPELESS);
+  const UINT allowed_bind=D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE |
+      (probe_texture ? D3D11_BIND_DEPTH_STENCIL : 0);
   if (!object || !desc ||
       desc->Usage != D3D11_USAGE_DEFAULT || desc->CPUAccessFlags || desc->MiscFlags ||
-      desc->MipLevels != 1 || desc->SampleDesc.Count != 1 || desc->SampleDesc.Quality ||
+      desc->MipLevels != 1 || (desc->SampleDesc.Count != 1 && !probe_texture) || desc->SampleDesc.Quality ||
       !desc->Width || !desc->Height || !desc->ArraySize || !desc->BindFlags ||
-      (desc->BindFlags & ~(D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE)))
+      (desc->BindFlags & ~allowed_bind))
     return E_INVALIDARG;
   D3D11_TEXTURE2D_DESC1 requested = {};
   requested.Width = desc->Width;
