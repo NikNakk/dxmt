@@ -43,3 +43,10 @@ DEFINE_COM_INTERFACE("efc77ae6-2179-4c0a-b844-7661ca0dcde7", IMTLD3D11DeviceExt)
     : public IUnknown {
   virtual void STDMETHODCALLTYPE SetShaderExtensionSlot(UINT Slot) = 0;
 };
+
+// Private Metal copy for temporal-scaler ROIs, including resolved depth.
+// Not an extension to D3D11 CopySubresourceRegion's application contract.
+DEFINE_COM_INTERFACE("86b756f4-786a-48d1-918d-a7512540658a", IMTLD3D11ContextExt2) : public IMTLD3D11ContextExt1 {
+  virtual HRESULT STDMETHODCALLTYPE CopyTemporalRegion(ID3D11Texture2D *source, UINT x, UINT y,
+      ID3D11Texture2D *destination, UINT dx, UINT dy, UINT width, UINT height) = 0;
+};
