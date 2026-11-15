@@ -13,6 +13,7 @@ struct MTL_GRAPHICS_PIPELINE_DESC {
   ManagedShader DomainShader;
   ManagedShader GeometryShader;
   ManagedShader PixelShader;
+  bool RateMapRead = true;
   IMTLD3D11BlendState *BlendState;
   ManagedInputLayout InputLayout;
   IMTLD3D11StreamOutputLayout *SOLayout;
@@ -52,6 +53,7 @@ template <> struct hash<MTL_GRAPHICS_PIPELINE_DESC> {
     dxmt::HashState state;
     state.add((size_t)v.VertexShader);
     state.add((size_t)v.PixelShader);
+    state.add(v.RateMapRead);
     state.add((size_t)v.HullShader);
     state.add((size_t)v.DomainShader);
     state.add((size_t)v.GeometryShader);
@@ -122,7 +124,8 @@ template <> struct equal_to<MTL_GRAPHICS_PIPELINE_DESC> {
       }
     }
     return (x.VertexShader == y.VertexShader) &&
-           (x.PixelShader == y.PixelShader) && (x.HullShader == y.HullShader) &&
+           (x.PixelShader == y.PixelShader) && (x.RateMapRead == y.RateMapRead) &&
+           (x.HullShader == y.HullShader) &&
            (x.DomainShader == y.DomainShader) && 
            (x.GeometryShader == y.GeometryShader) &&
            (x.InputLayout == y.InputLayout) &&

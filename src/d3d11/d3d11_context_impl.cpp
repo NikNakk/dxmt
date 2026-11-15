@@ -4917,6 +4917,14 @@ public:
     InitializeGraphicsPipelineDesc<IndexedDraw>(pipelineDesc);
 
     device->CreateGraphicsPipeline(&pipelineDesc, &pipeline);
+    MTLCompiledGraphicsPipeline *pipeline_no_read = nullptr;
+    static const bool selective_read = env::getEnvVar("DXMT_RATE_MAP_SELECTIVE_READ") == "1" &&
+        env::getEnvVar("DXMT_RATE_MAP_POSITION") == "1" &&
+        env::getEnvVar("DXMT_RATE_MAP_DIAGNOSTIC_SHADER_MASK").empty();
+    if (selective_read && pipelineDesc.PixelShader) {
+      pipelineDesc.RateMapRead = false;
+      device->CreateGraphicsPipeline(&pipelineDesc, &pipeline_no_read);
+    }
     if (tbdrAuditEnabled() && tbdrAuditDetail()) {
       auto vs = pipelineDesc.VertexShader ? pipelineDesc.VertexShader->sha1().string() : "none";
       auto ps = pipelineDesc.PixelShader ? pipelineDesc.PixelShader->sha1().string() : "none";
@@ -4932,7 +4940,7 @@ public:
             unsigned(depth.StencilWriteMask), sample_mask);
       });
     }
-    EmitST([pso = std::move(pipeline)](ArgumentEncodingContext& enc) {
+    EmitST([pso = std::move(pipeline), pipeline_no_read](ArgumentEncodingContext& enc) {
       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
       pso->GetPipeline(&GraphicsPipeline); // may block
       if (!GraphicsPipeline.PipelineState)
@@ -4941,6 +4949,13 @@ public:
       cmd.type = WMTRenderCommandSetPSO;
       cmd.pso = GraphicsPipeline.PipelineState;
       enc.currentRenderEncoder()->last_pso = GraphicsPipeline.PipelineState;
+      if (pipeline_no_read) {
+        MTL_COMPILED_GRAPHICS_PIPELINE ordinary{};
+        pipeline_no_read->GetPipeline(&ordinary);
+        if (ordinary.PipelineState)
+          enc.currentRenderEncoder()->no_read_pipelines.emplace_back(
+              GraphicsPipeline.PipelineState, ordinary.PipelineState);
+      }
     });
 
     cmdbuf_state = CommandBufferState::RenderPipelineReady;
