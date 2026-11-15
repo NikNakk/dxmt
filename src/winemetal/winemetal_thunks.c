@@ -1428,3 +1428,15 @@ MTLDevice_retainRasterizationRateMap(obj_handle_t device, obj_handle_t map) {
   UNIX_CALL(155, &params);
   return params.ret;
 }
+
+WINEMETAL_API obj_handle_t
+MTLDevice_retainRasterizationRateMapForSize(obj_handle_t device, obj_handle_t map, uint32_t width, uint32_t height) {
+  if (!device || !map) return 0;
+  struct WMTSize size = {width, height, 1};
+  struct unixcall_mtldevice_retainobject params = {0};
+  params.device = device;
+  params.object = map;
+  WMT_MEMPTR_SET(params.info, &size);
+  UNIX_CALL(155, &params);
+  return params.ret;
+}

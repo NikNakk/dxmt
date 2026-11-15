@@ -83,6 +83,15 @@ static const GUID DXMT_IID_NATIVE_CONTEXT1 = {
 struct IDXMTNativeContext1 : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE SetRasterizationRateMap(UINT64 map) = 0;
 };
+/* Explicit per-resource binding. Immediate context only; DEFAULT, single-mip,
+ * single-sample, non-array colour RTs. The caller uses a compatible single
+ * colour render pass without depth. The binding does not apply to other RTs,
+ * and follows the resource through view changes. Null map removes it. */
+static const GUID DXMT_IID_NATIVE_CONTEXT2 = {
+    0x43564649, 0xb3b8, 0x4ee3, {0x8a, 0xdd, 0x2c, 0x86, 0x77, 0x9b, 0x3a, 0x50}};
+struct IDXMTNativeContext2 : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE SetRenderTargetRasterizationRateMap(ID3D11Texture2D *target, UINT64 map) = 0;
+};
 struct IDXMTNativeDevice : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE ImportSharedTexture(
       const char *bootstrap_name, const D3D11_TEXTURE2D_DESC *desc,

@@ -38,6 +38,13 @@ _MTLDevice_retainRasterizationRateMap(void *args) {
       ![object respondsToSelector:@selector(device)]) return STATUS_SUCCESS;
   id<MTLRasterizationRateMap> map = object;
   if (map.device != (id<MTLDevice>)params->device || map.layerCount != 1) return STATUS_SUCCESS;
+  if (params->info.ptr) {
+    const struct WMTSize *size = params->info.ptr;
+    MTLSize logical = map.screenSize;
+    MTLSize physical = [map physicalSizeForLayer:0];
+    if (logical.width != size->width || logical.height != size->height ||
+        physical.width > size->width || physical.height > size->height) return STATUS_SUCCESS;
+  }
   params->ret = (obj_handle_t)[map retain];
   return STATUS_SUCCESS;
 }
