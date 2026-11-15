@@ -1320,6 +1320,7 @@ public:
     uint32_t ControlPointCount;
     if(!to_metal_primitive_type(state_.InputAssembler.Topology, Primitive, ControlPointCount))
       return;
+    if (unlikely(replay_capture_pending_)) CaptureReplayDraw(VertexCount, StartVertexLocation);
     DrawCallStatus status = PreDraw<false>();
     if (status == DrawCallStatus::Invalid)
       return;
@@ -1850,6 +1851,7 @@ public:
   STDMETHODCALLTYPE
   DrawAuto() override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) RejectReplayDraw();
 
     EmitST([](ArgumentEncodingContext &enc) { enc.setCompatibilityFlag(FeatureCompatibility::UnsupportedDrawAuto); });
   }
@@ -4939,6 +4941,7 @@ public:
   template <bool IndexedDraw>
   DrawCallStatus
   PreDraw() {
+    if (unlikely(replay_capture_pending_)) RejectReplayDraw();
     DrawCallStatus status;
     if constexpr (IndexedDraw) {
       if (!state_.InputAssembler.IndexBuffer)
@@ -5240,6 +5243,9 @@ public:
   }
 
 protected:
+  bool replay_capture_pending_ = false;
+  virtual void CaptureReplayDraw(UINT, UINT) {}
+  virtual void RejectReplayDraw() {}
   MTLD3D11Device *device;
   CommandBufferState cmdbuf_state = CommandBufferState::Idle;
   CommandBufferState previous_render_pipeline_state = CommandBufferState::Idle;

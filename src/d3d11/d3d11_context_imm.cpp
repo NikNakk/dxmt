@@ -10,6 +10,8 @@
 #include "d3d11_context_impl.cpp"
 #include "dxmt_context.hpp"
 #include "dxmt_staging.hpp"
+#include "d3d11_replay_probe.hpp"
+#include <unordered_set>
 
 namespace dxmt {
 struct ContextInternalState {
@@ -74,7 +76,11 @@ ImmediateContextBase::GetDynamicBufferAllocation(Rc<DynamicBuffer> &dynamic) {
   return {dynamic->immediateName().ptr(), dynamic->immediateSuballocation()};
 }
 
-class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1, public IDXMTNativeContext2 {
+class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1, public IDXMTNativeContext2, public IDXMTReplayProbe {
+  const bool replay_enabled_=env::getEnvVar("DXMT_REPLAY_CAPTURE")=="1";
+  bool replay_map_active_=false;
+  Com<ReplayProbePacket> replay_packet_;
+  std::unordered_set<ID3D11Asynchronous*> replay_queries_;
 public:
   MTLD3D11ImmediateContext(MTLD3D11Device *pDevice, CommandQueue &cmd_queue) :
       ImmediateContextBase(pDevice, ctx_state, pDevice->mutex),
@@ -86,6 +92,7 @@ public:
       }
 
   ~MTLD3D11ImmediateContext() override {
+    RejectReplayDraw();
     mutex.ownership_diagnostics->active.fetch_sub(ownership_windows_.size(), std::memory_order_relaxed);
   }
 
@@ -97,6 +104,11 @@ public:
 
     *ppvObject = nullptr;
 
+    if (riid == DXMT_IID_REPLAY_PROBE) {
+      *ppvObject = static_cast<IDXMTReplayProbe *>(this);
+      AddRef();
+      return S_OK;
+    }
     if (riid == DXMT_IID_NATIVE_CONTEXT2) {
       *ppvObject = static_cast<IDXMTNativeContext2 *>(this);
       AddRef();
@@ -140,8 +152,44 @@ public:
     return refCount;
   }
 
+  HRESULT STDMETHODCALLTYPE CaptureNextDraw(UINT64 budget, IDXMTReplayPacket **out) override {
+    if(!out)return E_POINTER;
+    *out=nullptr;
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(!replay_enabled_)return DXGI_ERROR_UNSUPPORTED;
+    if(replay_capture_pending_)return DXGI_ERROR_INVALID_CALL;
+    if(!budget || budget>64*1024*1024)return E_INVALIDARG;
+    replay_packet_=new ReplayProbePacket(budget);
+    // Com adds a reference; balance the constructor's initial reference.
+    replay_packet_->Release();
+    *out=ref(static_cast<IDXMTReplayPacket*>(replay_packet_.ptr()));
+    replay_capture_pending_=true;return S_OK;
+  }
+
+  void RejectReplayDraw() override {
+    replay_capture_pending_=false;
+    if(replay_packet_)replay_packet_->fail();
+    replay_packet_=nullptr;
+  }
+
+  void CaptureReplayDraw(UINT count, UINT start) override {
+    replay_capture_pending_=false;
+    auto vs=GetManagedShader<PipelineStage::Vertex>();auto ps=GetManagedShader<PipelineStage::Pixel>();
+    // This first packet owns only one ordinary VS/PS draw. Never guess about
+    // extra stages, outputs, side effects, queries or existing mapped passes.
+    if(!vs || !ps || vs->reflection().UAVSlotMask || ps->reflection().UAVSlotMask ||
+       GetManagedShader<PipelineStage::Geometry>() || GetManagedShader<PipelineStage::Hull>() ||
+       GetManagedShader<PipelineStage::Domain>() || state_.OutputMerger.NumRTVs!=1 ||
+       state_.OutputMerger.UAVs.any_bound() || state_.StreamOutput.Targets.any_bound() ||
+       state_.predicate || !replay_queries_.empty() || replay_map_active_ ||
+       env::getEnvVar("DXMT_BASE_FOVEATION")=="1") replay_packet_->fail();
+    else replay_packet_->capture(m_parent,static_cast<ID3D11DeviceContext1*>(this),count,start);
+    replay_packet_=nullptr;
+  }
+
   HRESULT STDMETHODCALLTYPE SetRasterizationRateMap(UINT64 map) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(map) replay_map_active_=true;
     WMT::Reference<WMT::Object> retained;
     if (map) {
       auto handle = MTLDevice_retainRasterizationRateMap(m_parent->GetMTLDevice().handle, map);
@@ -164,6 +212,7 @@ public:
   }
 
   HRESULT STDMETHODCALLTYPE SetRenderTargetRasterizationRateMap(ID3D11Texture2D *target, UINT64 map) override {
+    if(map) replay_map_active_=true;
     if (!target) return E_INVALIDARG;
     if(map && env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1") return E_NOTIMPL;
     std::lock_guard<d3d11_device_mutex> lock(mutex);
@@ -396,6 +445,7 @@ public:
 
     std::lock_guard<d3d11_device_mutex> lock(mutex);
 
+    if(replay_enabled_)replay_queries_.insert(pAsync);
     // in theory pAsync could be any of them: { Query, Predicate, Counter }.
     // However `Predicate` and `Counter` are not supported at all
     D3D11_QUERY_DESC desc;
@@ -432,6 +482,7 @@ public:
 
     std::lock_guard<d3d11_device_mutex> lock(mutex);
 
+    if(replay_enabled_)replay_queries_.erase(pAsync);
     D3D11_QUERY_DESC desc;
     ((ID3D11Query *)pAsync)->GetDesc(&desc);
     switch (desc.Query) {
