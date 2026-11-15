@@ -2283,6 +2283,12 @@ struct SM50_SHADER_EMULATE_VERTEX_STREAM_OUTPUT_DATA32 {
   uint32_t elements;
 };
 
+struct SM50_SHADER_RATE_MAP_READ_MASK_DATA32 {
+  uint32_t next;
+  enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE type;
+  uint32_t slots[4];
+};
+
 struct SM50_SHADER_COMMON_DATA32 {
   uint32_t next;
   enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE type;
@@ -2370,6 +2376,16 @@ sm50_compilation_argument32_convert(
       data->strides[2] = src->strides[2];
       data->strides[3] = src->strides[3];
       data->elements = UInt32ToPtr(src->elements);
+      break;
+    }
+    case SM50_SHADER_RATE_MAP_READ_MASK: {
+      struct SM50_SHADER_RATE_MAP_READ_MASK_DATA32 *src = (void *)args32;
+      struct SM50_SHADER_RATE_MAP_READ_MASK_DATA *data = malloc(sizeof(*data));
+      last_arg->next = data;
+      last_arg = (void *)data;
+      data->next = NULL;
+      data->type = src->type;
+      memcpy(data->slots, src->slots, sizeof(data->slots));
       break;
     }
     case SM50_SHADER_COMMON: {

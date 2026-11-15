@@ -346,6 +346,8 @@ llvm::Error convert_dxbc_pixel_shader(
   Prologues prologue;
   Epilogues epilogue;
 
+  SM50_SHADER_RATE_MAP_READ_MASK_DATA *read_mask = nullptr;
+  args_get_data<SM50_SHADER_RATE_MAP_READ_MASK, SM50_SHADER_RATE_MAP_READ_MASK_DATA>(pArgs, &read_mask);
   io_binding_map resource_map;
   air::AirType types(context);
   uint32_t rate_map_read_argument = ~0u;
@@ -442,6 +444,10 @@ llvm::Error convert_dxbc_pixel_shader(
       .rate_map_read_argument = rate_map_read_argument,
   };
 
+  if (read_mask) {
+    ctx.rate_map_read_specialized = true;
+    std::copy_n(read_mask->slots, 4, ctx.rate_map_read_slots.begin());
+  }
   IOHelper io(air, function, types, resource_map);
 
   if (auto err = prologue.Run(io)) {
@@ -470,6 +476,9 @@ llvm::Error convert_dxbc_pixel_shader(
   module.getOrInsertNamedMetadata("air.fragment")
     ->addOperand(function_metadata);
 
+  if (read_mask)
+    llvm::errs() << "RATE_MAP_MASK_COMPILE name=" << name << " pruned=" << resource_map.rate_map_pruned_ops
+                 << " forced=" << resource_map.rate_map_forced_ops << "\n";
   return llvm::Error::success();
 };
 

@@ -63,7 +63,8 @@ public:
     auto MemoryAccess =
         Iter->second.sampled ? Texture::MemoryAccess::access_sample : Texture::MemoryAccess::access_read;
 
-    return TextureDescirptor{Handle, Metadata, false, ResourceKind, ResourceKindLogical, MemoryAccess, SampleType};
+    return TextureDescirptor{Handle, Metadata, false, ResourceKind, ResourceKindLogical, MemoryAccess, SampleType,
+        Iter->second.range.space == 0 && Iter->second.range.size == 1 ? Iter->second.range.lower_bound : ~0u};
   }
 
   virtual llvm::Optional<TextureDescirptor>

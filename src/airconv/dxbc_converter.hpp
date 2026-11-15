@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <functional>
 #include <map>
 #include <optional>
@@ -181,6 +182,7 @@ struct io_binding_map {
   // Pixel stage with rate-map position translation: SV_Position before translation.
   llvm::Value *rate_map_raw_position = nullptr;
   uint32_t rate_map_position_reg = ~0u;
+  uint32_t rate_map_pruned_ops = 0, rate_map_forced_ops = 0;
 
   // special buffers for tessellation
   llvm::Type *hull_cp_passthrough_type = nullptr;
@@ -217,6 +219,8 @@ struct context {
   SM50_SHADER_METAL_VERSION metal_version;
   // Pixel stage only: forward tables of the map whose layout sampled targets use.
   uint32_t rate_map_read_argument = ~0u;
+  bool rate_map_read_specialized = false;
+  std::array<uint32_t, 4> rate_map_read_slots = {~0u, ~0u, ~0u, ~0u};
 };
 
 llvm::Expected<llvm::BasicBlock *> convert_basicblocks(

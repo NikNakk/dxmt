@@ -51,6 +51,7 @@ struct TextureResourceHandle {
   llvm::Value *Metadata;
   Swizzle Swizzle;
   bool GlobalCoherent;
+  int RateMapMode = -1; // -1 dynamic, 0 ordinary, 1 translated SRV
 };
 
 struct BufferResourceHandle {
@@ -467,13 +468,13 @@ public:
   /* Reads of render targets left in rasterization-rate-map layout */
   llvm::Value *RateMapMapped(llvm::Value *Metadata);
   llvm::Value *RateMapPhysical(llvm::Value *Logical, bool Normalized);
-  llvm::Value *RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized, bool OwnPixel = false);
+  llvm::Value *RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized, bool OwnPixel = false, int Mode = -1);
   llvm::Value *RateMapTexelTable(llvm::Value *Address);
   // A temp register known to hold int(SV_Position.xy) within the current block.
   uint32_t pixel_coord_temp = ~0u;
   void ResetBlockState() { pixel_coord_temp = ~0u; }
-  llvm::Value *RateMapTexel(llvm::Value *Address, llvm::Value *Metadata, bool OwnPixel = false);
-  llvm::Value *RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata);
+  llvm::Value *RateMapTexel(llvm::Value *Address, llvm::Value *Metadata, bool OwnPixel = false, int Mode = -1);
+  llvm::Value *RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata, int Mode = -1);
 
   llvm::Value *
   DecodeRawBufferByteLength(llvm::Value *Metadata) {

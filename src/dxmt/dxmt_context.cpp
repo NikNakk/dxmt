@@ -337,6 +337,11 @@ ArgumentEncodingContext::encodeShaderResources(
       break;
     }
     case SM50BindingType::SRV: {
+      if constexpr (stage == PipelineStage::Pixel) {
+        static const bool resource_mask_enabled = env::getEnvVar("DXMT_RATE_MAP_RESOURCE_READ") == "1";
+        if (resource_mask_enabled && arg.SM50BindingSlot < 128)
+          currentRenderEncoder()->current_read_slots[arg.SM50BindingSlot / 32] &= ~(1u << (arg.SM50BindingSlot % 32));
+      }
       auto slot = 128 * unsigned(stage) + arg.SM50BindingSlot;
       auto &srv = resview_[slot];
 
@@ -391,6 +396,11 @@ ArgumentEncodingContext::encodeShaderResources(
             if (sceneTraceEnabled())
               sceneTrace("rate_map_read encoder=%llu stage=%u slot=%u translated=%u", (unsigned long long)encoder_current->id,
                          unsigned(stage), unsigned(arg.SM50BindingSlot), unsigned(array_length >> 31));
+          }
+          if constexpr (stage == PipelineStage::Pixel) {
+            static const bool resource_mask_enabled = env::getEnvVar("DXMT_RATE_MAP_RESOURCE_READ") == "1";
+            if (resource_mask_enabled && arg.SM50BindingSlot < 128 && (array_length & 0x80000000u))
+              currentRenderEncoder()->current_read_slots[arg.SM50BindingSlot / 32] |= 1u << (arg.SM50BindingSlot % 32);
           }
           encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(array_length, 0);
           if (layoutAuditFrame(currentFrameId()))
@@ -1397,6 +1407,14 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
           }
         }
       }
+      if (tbdr_audit.active) {
+        const auto &s = data->resource_read_stats;
+        tbdr_audit.read_mask_draws += s.draws;
+        tbdr_audit.read_mask_kept += s.kept;
+        tbdr_audit.read_mask_pruned += s.pruned;
+        tbdr_audit.read_mask_mixed += s.mixed;
+        tbdr_audit.read_mask_fallback += s.fallback;
+      }
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
       if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(renderLabel(data).c_str(), WMTUTF8StringEncoding));
@@ -1879,6 +1897,11 @@ ArgumentEncodingContext::checkEncoderRelation(EncoderData *former, EncoderData *
         r0->cmd_head.next.set(nullptr);
         r0->cmd_tail = (wmtcmd_base *)&r0->cmd_head;
       }
+      r1->resource_read_stats.draws += r0->resource_read_stats.draws;
+      r1->resource_read_stats.kept += r0->resource_read_stats.kept;
+      r1->resource_read_stats.pruned += r0->resource_read_stats.pruned;
+      r1->resource_read_stats.mixed += r0->resource_read_stats.mixed;
+      r1->resource_read_stats.fallback += r0->resource_read_stats.fallback;
       r1->no_read_pipelines.insert(r1->no_read_pipelines.end(),
                                   r0->no_read_pipelines.begin(), r0->no_read_pipelines.end());
       r1->use_tessellation = r0->use_tessellation || r1->use_tessellation;

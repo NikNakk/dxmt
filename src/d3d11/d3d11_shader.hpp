@@ -8,6 +8,7 @@
 #include "sha1/sha1_util.hpp"
 #include "log/log.hpp"
 #include <variant>
+#include <array>
 
 struct MTL_COMPILED_SHADER {
   /**
@@ -105,11 +106,13 @@ struct ShaderVariantPixel {
   bool disable_depth_output;
   uint32_t unorm_output_reg_mask;
   bool rate_map_read = true;
+  std::array<uint32_t, 4> read_slots = {~0u, ~0u, ~0u, ~0u};
   bool operator==(const this_type &rhs) const {
     return sample_mask == rhs.sample_mask &&
            dual_source_blending == rhs.dual_source_blending &&
            disable_depth_output == rhs.disable_depth_output &&
-           unorm_output_reg_mask == rhs.unorm_output_reg_mask && rate_map_read == rhs.rate_map_read;
+           unorm_output_reg_mask == rhs.unorm_output_reg_mask && rate_map_read == rhs.rate_map_read &&
+           read_slots == rhs.read_slots;
   }
 };
 

@@ -14,6 +14,7 @@ struct MTL_GRAPHICS_PIPELINE_DESC {
   ManagedShader GeometryShader;
   ManagedShader PixelShader;
   bool RateMapRead = true;
+  std::array<uint32_t, 4> ReadSlots = {~0u, ~0u, ~0u, ~0u};
   IMTLD3D11BlendState *BlendState;
   ManagedInputLayout InputLayout;
   IMTLD3D11StreamOutputLayout *SOLayout;
@@ -54,6 +55,7 @@ template <> struct hash<MTL_GRAPHICS_PIPELINE_DESC> {
     state.add((size_t)v.VertexShader);
     state.add((size_t)v.PixelShader);
     state.add(v.RateMapRead);
+    for (auto word : v.ReadSlots) state.add(word);
     state.add((size_t)v.HullShader);
     state.add((size_t)v.DomainShader);
     state.add((size_t)v.GeometryShader);
@@ -124,7 +126,7 @@ template <> struct equal_to<MTL_GRAPHICS_PIPELINE_DESC> {
       }
     }
     return (x.VertexShader == y.VertexShader) &&
-           (x.PixelShader == y.PixelShader) && (x.RateMapRead == y.RateMapRead) &&
+           (x.PixelShader == y.PixelShader) && (x.RateMapRead == y.RateMapRead) && (x.ReadSlots == y.ReadSlots) &&
            (x.HullShader == y.HullShader) &&
            (x.DomainShader == y.DomainShader) && 
            (x.GeometryShader == y.GeometryShader) &&
@@ -149,6 +151,10 @@ public:
   NOTE: the current thread is blocked if it's not ready
    */
   virtual void GetPipeline(MTL_COMPILED_GRAPHICS_PIPELINE *pGraphicsPipeline) = 0;
+  virtual void GetReadMaskPipeline(const std::array<uint32_t, 4> &, MTL_COMPILED_GRAPHICS_PIPELINE *out,
+                                   uint32_t *kept, uint32_t *pruned) {
+    *out = {}; *kept = *pruned = 0;
+  }
 };
 
 class MTLCompiledComputePipeline : public ThreadpoolWork {
