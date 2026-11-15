@@ -815,19 +815,21 @@ ArgumentEncodingContext::prepareStayWarped() {
 static bool
 rateMapLayoutPass(const RenderEncoderData *data) {
   static const bool attachment_probe=env::getEnvVar("DXMT_RATE_MAP_ATTACHMENT_PROBE")=="1";
+  // The automatic stereo profile also maps multi-target and two-layer (one per eye)
+  // passes and declines swapchain passes.
+  static const bool stay_warped=!env::getEnvVar("DXMT_STAY_WARPED").empty();
+  static const unsigned max_layers=[]{auto v=env::getEnvVar("DXMT_STAY_WARPED_LAYERS");return v.empty()?2u:unsigned(std::strtoul(v.c_str(),nullptr,10));}();
   const bool attachment_supported=(!data->depth.attachment && !data->stencil.attachment &&
       data->tile_barrier_pso_key.raster_sample_count==1) ||
       (attachment_probe && data->depth.attachment &&
        ((!data->stencil.attachment && data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float) ||
         (data->depth.attachment==data->stencil.attachment && data->depth.attachment->allocation->descriptor->pixelFormat()==WMTPixelFormatDepth32Float_Stencil8)) &&
        (data->tile_barrier_pso_key.raster_sample_count==1 || data->tile_barrier_pso_key.raster_sample_count==2 ||
-        data->tile_barrier_pso_key.raster_sample_count==4));
-  // The automatic stereo profile also maps multi-target passes and declines swapchain passes.
-  static const bool stay_warped=!env::getEnvVar("DXMT_STAY_WARPED").empty();
+        data->tile_barrier_pso_key.raster_sample_count==4 || (stay_warped && max_layers>1 && data->tile_barrier_pso_key.raster_sample_count==8)));
   if(data->rate_map_excluded) return false;
   return data->rate_map_positions &&
       (data->render_target_count==1 || (stay_warped && data->render_target_count>1) || (attachment_probe && data->render_target_count==0 && data->depth.attachment)) &&
-      attachment_supported && data->render_target_array_length<=1 &&
+      attachment_supported && data->render_target_array_length<=(stay_warped ? max_layers : 1) &&
       data->render_target_width==data->rate_map_logical_size.width && data->render_target_height==data->rate_map_logical_size.height;
 }
 

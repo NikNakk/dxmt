@@ -1439,6 +1439,13 @@ Converter::operator()(const InstLoad &load) {
     Address = RateMapTexel(Address, Tex->Metadata, OwnPixel, Tex->RateMapMode);
     break;
   }
+  case Texture::texture2d_array:
+  case Texture::depth2d_array:
+  case Texture::texture2d_ms_array:
+  case Texture::depth_2d_ms_array:
+    // Two-layer eye targets share one map (Unity's MSAA resolve loads these).
+    Address = RateMapTexel(Address, Tex->Metadata, false, Tex->RateMapMode);
+    break;
   default:
     break;
   }
@@ -1724,6 +1731,8 @@ Converter::operator()(const InstSample &sample) {
   case Texture::depth2d_array:
   case Texture::texture2d_array:
     Coord = LoadOperand(sample.src_address, kMaskVecXY);
+    // Two-layer eye targets share one map: every layer has the same layout.
+    Coord = RateMapCoord(Coord, Tex->Metadata, Tex->RateMapMode);
     ArrayIndex = LoadOperand(sample.src_address, kMaskComponentZ);
     ArrayIndex = ClampArrayIndex(ArrayIndex, Tex->Metadata);
     break;
@@ -1790,6 +1799,8 @@ Converter::operator()(const InstSampleLOD &sample) {
   case Texture::depth2d_array:
   case Texture::texture2d_array:
     Coord = LoadOperand(sample.src_address, kMaskVecXY);
+    // Two-layer eye targets share one map: every layer has the same layout.
+    Coord = RateMapCoord(Coord, Tex->Metadata, Tex->RateMapMode);
     ArrayIndex = LoadOperand(sample.src_address, kMaskComponentZ);
     ArrayIndex = ClampArrayIndex(ArrayIndex, Tex->Metadata);
     break;
