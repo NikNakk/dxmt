@@ -1418,3 +1418,13 @@ MTLDevice_retainEventObject(obj_handle_t device, obj_handle_t event) {
   UNIX_CALL(149, &params);
   return params.ret;
 }
+
+WINEMETAL_API obj_handle_t
+MTLDevice_retainRasterizationRateMap(obj_handle_t device, obj_handle_t map) {
+  if (!device || !map) return 0;
+  struct unixcall_mtldevice_retainobject params = {0};
+  params.device = device;
+  params.object = map;
+  UNIX_CALL(155, &params);
+  return params.ret;
+}

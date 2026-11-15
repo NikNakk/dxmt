@@ -637,6 +637,8 @@ ArgumentEncodingContext::startRenderPass(
   assert(!encoder_current);
   auto encoder_info = allocate<RenderEncoderData>();
   encoder_info->type = EncoderType::Render;
+  if (rasterization_rate_map)
+    encoder_info->rasterization_rate_map = rasterization_rate_map;
   encoder_info->encoder_id_vertex = nextEncoderId();
   encoder_info->fence_wait_vertex = {};
   encoder_info->fence_update_vertex = {encoder_info->encoder_id_vertex};
@@ -1058,6 +1060,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
       auto data = static_cast<RenderEncoderData *>(current);
       WMTRenderPassInfo render_pass_info;
       WMT::InitializeRenderPassInfo(render_pass_info);
+      render_pass_info.rasterization_rate_map = data->rasterization_rate_map.handle;
       {
         for (unsigned i = 0; i < std::size(render_pass_info.colors); i++) {
           auto &color_data = data->colors[i];
@@ -1637,6 +1640,9 @@ ArgumentEncodingContext::hasDataDependency(EncoderData *latter, EncoderData *for
 
 bool
 ArgumentEncodingContext::isEncoderSignatureMatched(RenderEncoderData *r0, RenderEncoderData *r1) {
+  // Different maps change physical pixel layout and must never merge.
+  if (r0->rasterization_rate_map.handle != r1->rasterization_rate_map.handle)
+    return false;
   // FIXME: it can be different?
   if (r0->render_target_count != r1->render_target_count)
     return false;

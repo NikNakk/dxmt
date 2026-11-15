@@ -696,6 +696,7 @@ struct WMTRenderPassInfo {
   uint32_t render_target_height;
   uint32_t render_target_width;
   obj_handle_t visibility_buffer;
+  obj_handle_t rasterization_rate_map;
 };
 
 WINEMETAL_API obj_handle_t MTLCommandBuffer_renderCommandEncoder(obj_handle_t cmdbuf, struct WMTRenderPassInfo *info);
@@ -2176,5 +2177,7 @@ WINEMETAL_API void MTLTexture_getBytes(
     obj_handle_t texture, struct WMTOrigin origin, struct WMTSize size, uint64_t level, uint64_t slice,
     struct WMTMemoryPointer data, uint64_t bytes_per_row, uint64_t bytes_per_image
 );
+
+WINEMETAL_API obj_handle_t MTLDevice_retainRasterizationRateMap(obj_handle_t device, obj_handle_t map);
 
 #endif
