@@ -75,7 +75,7 @@ ImmediateContextBase::GetDynamicBufferAllocation(Rc<DynamicBuffer> &dynamic) {
   return {dynamic->immediateName().ptr(), dynamic->immediateSuballocation()};
 }
 
-class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1, public IDXMTNativeContext2, public IDXMTReplayProbe {
+class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1, public IDXMTNativeContext2, public IDXMTReplayProbe, public IDXMTReplayPassProbe {
   const bool replay_enabled_=env::getEnvVar("DXMT_REPLAY_CAPTURE")=="1";
   bool replay_map_active_=false;
   Com<ReplayProbePacket> replay_packet_;
@@ -103,6 +103,10 @@ public:
 
     *ppvObject = nullptr;
 
+    if (riid == DXMT_IID_REPLAY_PASS_PROBE) {
+      *ppvObject = static_cast<IDXMTReplayPassProbe *>(this);
+      AddRef();return S_OK;
+    }
     if (riid == DXMT_IID_REPLAY_PROBE) {
       *ppvObject = static_cast<IDXMTReplayProbe *>(this);
       AddRef();
@@ -160,29 +164,54 @@ public:
     replay_capture_pending_=true;return S_OK;
   }
 
+  HRESULT STDMETHODCALLTYPE BeginPassCapture(UINT64 budget,UINT max_draws,IDXMTReplayPacket **out) override {
+    if(!out)return E_POINTER;
+    *out=nullptr;
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(!replay_enabled_)return DXGI_ERROR_UNSUPPORTED;
+    if(replay_capture_pending_)return DXGI_ERROR_INVALID_CALL;
+    if(!budget || budget>64*1024*1024 || !max_draws || max_draws>16)return E_INVALIDARG;
+    replay_packet_=new ReplayProbePacket(budget,max_draws,true);replay_packet_->Release();
+    *out=ref(static_cast<IDXMTReplayPacket*>(replay_packet_.ptr()));replay_capture_pending_=true;return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE EndPassCapture() override {
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(!replay_capture_pending_ || !replay_packet_->isPass())return DXGI_ERROR_INVALID_CALL;
+    auto result=replay_packet_->finish();replay_capture_pending_=false;replay_packet_=nullptr;return result;
+  }
+
+  void ReplayCaptureMutation(ID3D11Resource *resource=nullptr,bool input_update=false) override {
+    if(!replay_packet_ || !replay_packet_->isPass())return;
+    if(!input_update || replay_packet_->output(resource))RejectReplayDraw();
+    else replay_packet_->invalidate(resource);
+  }
+
   void RejectReplayDraw() override {
     replay_capture_pending_=false;
     if(replay_packet_)replay_packet_->fail();
     replay_packet_=nullptr;
   }
 
-  void CaptureReplayDraw(UINT count, UINT start) override {
+  void CaptureReplayDraw(UINT count, UINT start, bool indexed, INT base) override {
     replay_capture_pending_=false;
     auto vs=GetManagedShader<PipelineStage::Vertex>();auto ps=GetManagedShader<PipelineStage::Pixel>();
-    // This first packet owns only one ordinary VS/PS draw. Never guess about
-    // extra stages, outputs, side effects, queries or existing mapped passes.
-    if(!vs || !ps || vs->reflection().UAVSlotMask || ps->reflection().UAVSlotMask ||
+    // Each supported draw snapshots VS/PS state; no unrecorded GPU side effects.
+    if(!vs || vs->reflection().UAVSlotMask || (ps && ps->reflection().UAVSlotMask) ||
+       (indexed && !replay_packet_->isPass()) ||
        GetManagedShader<PipelineStage::Geometry>() || GetManagedShader<PipelineStage::Hull>() ||
        GetManagedShader<PipelineStage::Domain>() || state_.OutputMerger.NumRTVs!=1 ||
        state_.OutputMerger.UAVs.any_bound() || state_.StreamOutput.Targets.any_bound() ||
        state_.predicate || !replay_queries_.empty() || replay_map_active_ ||
        env::getEnvVar("DXMT_BASE_FOVEATION")=="1") replay_packet_->fail();
-    else replay_packet_->capture(m_parent,static_cast<ID3D11DeviceContext1*>(this),count,start);
-    replay_packet_=nullptr;
+    else replay_packet_->capture(m_parent,static_cast<ID3D11DeviceContext1*>(this),count,start,indexed,base);
+    if(replay_packet_->pending())replay_capture_pending_=true;
+    else replay_packet_=nullptr;
   }
 
   HRESULT STDMETHODCALLTYPE SetRasterizationRateMap(UINT64 map) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(replay_capture_pending_)ReplayCaptureMutation();
     if(map) replay_map_active_=true;
     WMT::Reference<WMT::Object> retained;
     if (map) {
@@ -210,6 +239,7 @@ public:
     if (!target) return E_INVALIDARG;
     if(map && env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1") return E_NOTIMPL;
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(replay_capture_pending_)ReplayCaptureMutation();
     ID3D11Device *owner = nullptr;
     target->GetDevice(&owner);
     bool own = owner == static_cast<ID3D11Device *>(m_parent);
@@ -257,6 +287,7 @@ public:
   Map(ID3D11Resource *pResource, UINT Subresource, D3D11_MAP MapType, UINT MapFlags,
       D3D11_MAPPED_SUBRESOURCE *pMappedResource) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(replay_capture_pending_ && MapType!=D3D11_MAP_READ)ReplayCaptureMutation(pResource,true);
 
     if (unlikely(!pResource || !pMappedResource))
       return E_INVALIDARG;
@@ -430,11 +461,14 @@ public:
 
     std::lock_guard<d3d11_device_mutex> lock(mutex);
 
-    if(replay_enabled_)replay_queries_.insert(pAsync);
     // in theory pAsync could be any of them: { Query, Predicate, Counter }.
     // However `Predicate` and `Counter` are not supported at all
     D3D11_QUERY_DESC desc;
     ((ID3D11Query *)pAsync)->GetDesc(&desc);
+    if(replay_enabled_ && desc.Query!=D3D11_QUERY_TIMESTAMP_DISJOINT) {
+      if(replay_capture_pending_)ReplayCaptureMutation();
+      replay_queries_.insert(pAsync);
+    }
     switch (desc.Query) {
     case D3D11_QUERY_TIMESTAMP_DISJOINT:
     case D3D11_QUERY_TIMESTAMP:
@@ -629,6 +663,7 @@ public:
   STDMETHODCALLTYPE
   ExecuteCommandList(ID3D11CommandList *pCommandList, BOOL RestoreContextState) override {
     std::lock_guard<d3d11_device_mutex> lock(mutex);
+    if(replay_capture_pending_)ReplayCaptureMutation();
 
     ResetEncodingContextState();
 

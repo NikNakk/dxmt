@@ -655,6 +655,8 @@ public:
   void
   STDMETHODCALLTYPE
   SetResourceMinLOD(ID3D11Resource *pResource, FLOAT MinLOD) override {
+    std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
     if (auto expected = com_cast<IMTLMinLODClampable>(pResource)) {
       expected->SetMinLOD(MinLOD);
     }
@@ -675,6 +677,7 @@ public:
   STDMETHODCALLTYPE
   ClearRenderTargetView(ID3D11RenderTargetView *pRenderTargetView, const FLOAT ColorRGBA[4]) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     ClearRenderTargetView(static_cast<D3D11RenderTargetView *>(pRenderTargetView), ColorRGBA);
   }
@@ -683,6 +686,7 @@ public:
   STDMETHODCALLTYPE
   ClearUnorderedAccessViewUint(ID3D11UnorderedAccessView *pUnorderedAccessView, const UINT Values[4]) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     ClearUnorderedAccessViewUint(static_cast<D3D11UnorderedAccessView *>(pUnorderedAccessView), Values);
   }
@@ -755,6 +759,7 @@ public:
   STDMETHODCALLTYPE
   ClearUnorderedAccessViewFloat(ID3D11UnorderedAccessView *pUnorderedAccessView, const FLOAT Values[4]) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     ClearUnorderedAccessViewFloat(static_cast<D3D11UnorderedAccessView *>(pUnorderedAccessView), Values);
   }
@@ -812,6 +817,7 @@ public:
   ClearDepthStencilView(ID3D11DepthStencilView *pDepthStencilView, UINT ClearFlags, FLOAT Depth, UINT8 Stencil)
       override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     ClearDepthStencilView(static_cast<D3D11DepthStencilView*>(pDepthStencilView), ClearFlags, Depth, Stencil);
   }
@@ -820,6 +826,7 @@ public:
   STDMETHODCALLTYPE
   ClearView(ID3D11View *pView, const FLOAT Color[4], const D3D11_RECT *pRect, UINT NumRects) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (NumRects && !pRect)
       return;
@@ -952,6 +959,7 @@ public:
   STDMETHODCALLTYPE
   GenerateMips(ID3D11ShaderResourceView *pShaderResourceView) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (auto srv = static_cast<D3D11ShaderResourceView *>(pShaderResourceView)) {
       D3D11_SHADER_RESOURCE_VIEW_DESC desc;
@@ -983,6 +991,7 @@ public:
       DXGI_FORMAT Format
   ) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (!pDstResource || !pSrcResource)
       return;
@@ -1048,6 +1057,7 @@ public:
   STDMETHODCALLTYPE
   CopyResource(ID3D11Resource *pDstResource, ID3D11Resource *pSrcResource) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (!pDstResource || !pSrcResource || (pDstResource == pSrcResource))
       return;
@@ -1107,6 +1117,7 @@ public:
       UINT SrcSubresource, const D3D11_BOX *pSrcBox, UINT CopyFlags
   ) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (!pDstResource)
       return;
@@ -1139,6 +1150,7 @@ public:
   CopyStructureCount(ID3D11Buffer *pDstBuffer, UINT DstAlignedByteOffset, ID3D11UnorderedAccessView *pSrcView)
       override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (auto uav = static_cast<D3D11UnorderedAccessView *>(pSrcView)) {
       if (!uav->hasCounter())
@@ -1192,6 +1204,7 @@ public:
       UINT SrcRowPitch, UINT SrcDepthPitch, UINT CopyFlags
   ) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation(pDstResource,true);
 
     if (!pDstResource)
       return;
@@ -1261,6 +1274,8 @@ public:
   void
   STDMETHODCALLTYPE
   DiscardResource(ID3D11Resource *pResource) override {
+    std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
     /*
     All the Discard* API is not implemented and that's probably fine (as it's
     more like a hint of optimization, and Metal manages resources on its own)
@@ -1279,6 +1294,8 @@ public:
   void
   STDMETHODCALLTYPE
   DiscardView1(ID3D11View *pResourceView, const D3D11_RECT *pRects, UINT NumRects) override {
+    std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
     ERR_ONCE("Not implemented");
   }
 #pragma endregion
@@ -1296,7 +1313,10 @@ public:
     uint32_t ControlPointCount;
     if(!to_metal_primitive_type(state_.InputAssembler.Topology, Primitive, ControlPointCount))
       return;
-    if (unlikely(replay_capture_pending_)) CaptureReplayDraw(VertexCount, StartVertexLocation);
+    if (unlikely(replay_capture_pending_)) {
+      CaptureReplayDraw(VertexCount, StartVertexLocation, false, 0);
+      replay_draw_prepared_=true;
+    }
     DrawCallStatus status = PreDraw<false>();
     if (status == DrawCallStatus::Invalid)
       return;
@@ -1330,6 +1350,10 @@ public:
     uint32_t ControlPointCount;
     if(!to_metal_primitive_type(state_.InputAssembler.Topology, Primitive, ControlPointCount))
       return;
+    if (unlikely(replay_capture_pending_)) {
+      CaptureReplayDraw(IndexCount, StartIndexLocation, true, BaseVertexLocation);
+      replay_draw_prepared_=true;
+    }
     DrawCallStatus status = PreDraw<true>();
     if (status == DrawCallStatus::Invalid)
       return;
@@ -1836,6 +1860,7 @@ public:
   STDMETHODCALLTYPE
   Dispatch(UINT ThreadGroupCountX, UINT ThreadGroupCountY, UINT ThreadGroupCountZ) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (!PreDispatch())
       return;
@@ -1851,6 +1876,7 @@ public:
   STDMETHODCALLTYPE
   DispatchIndirect(ID3D11Buffer *pBufferForArgs, UINT AlignedByteOffsetForArgs) override {
     std::lock_guard<mutex_t> lock(mutex);
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
 
     if (!PreDispatch())
       return;
@@ -3685,6 +3711,7 @@ public:
 
   void
   UpdateUAVCounter(D3D11UnorderedAccessView *uav, uint32_t value) {
+    if (unlikely(replay_capture_pending_)) ReplayCaptureMutation();
     if (!uav->hasCounter())
       return;
     EmitST([counter = uav->counter(), value](ArgumentEncodingContext &enc) {
@@ -5009,7 +5036,8 @@ public:
   template <bool IndexedDraw>
   DrawCallStatus
   PreDraw() {
-    if (unlikely(replay_capture_pending_)) RejectReplayDraw();
+    if (unlikely(replay_capture_pending_ && !replay_draw_prepared_)) RejectReplayDraw();
+    replay_draw_prepared_=false;
     DrawCallStatus status;
     if constexpr (IndexedDraw) {
       if (!state_.InputAssembler.IndexBuffer)
@@ -5334,7 +5362,9 @@ public:
 
 protected:
   bool replay_capture_pending_ = false;
-  virtual void CaptureReplayDraw(UINT, UINT) {}
+  bool replay_draw_prepared_ = false;
+  virtual void CaptureReplayDraw(UINT, UINT, bool, INT) {}
+  virtual void ReplayCaptureMutation(ID3D11Resource * = nullptr, bool = false) {}
   virtual void RejectReplayDraw() {}
   MTLD3D11Device *device;
   CommandBufferState cmdbuf_state = CommandBufferState::Idle;
