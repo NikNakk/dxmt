@@ -1449,3 +1449,11 @@ MTLDevice_rateMapInversePositions(obj_handle_t device, obj_handle_t map, struct 
   if(logical_size) *logical_size=params.logical_size;
   return params.ret;
 }
+
+WINEMETAL_API void
+MTLDevice_newBaseFoveation(obj_handle_t device, uint32_t width, uint32_t height,
+    obj_handle_t pipeline, struct WMTBaseFoveation *result) {
+  struct unixcall_base_foveation params={0};
+  params.device=device;params.width=width;params.height=height;params.pipeline=pipeline;
+  UNIX_CALL(157,&params); *result=params.result;
+}

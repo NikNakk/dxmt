@@ -710,9 +710,64 @@ ArgumentEncodingContext::startBlitPass() {
   return encoder_info;
 }
 
+bool
+ArgumentEncodingContext::prepareBaseFoveation(unsigned width, unsigned height) {
+  if(base_foveation_hidden && width==base_foveation_size.width && height==base_foveation_size.height) return true;
+  WMTBaseFoveation bundle={};
+  MTLDevice_newBaseFoveation(device_.handle,width,height,base_foveation_pipeline.handle,&bundle);
+  WMT::Reference<WMT::Object> map(bundle.map);
+  WMT::Reference<WMT::Buffer> forward(bundle.forward);
+  WMT::Reference<WMT::ComputePipelineState> pipeline(bundle.pipeline);
+  WMTSize logical={};
+  WMT::Reference<WMT::Buffer> inverse(map ? MTLDevice_rateMapInversePositions(device_.handle,map.handle,&logical) : 0);
+  if(!map || !forward || !pipeline || !inverse) return false;
+  // Full logical allocation in this first prototype; only the mapped physical region is shaded.
+  WMTTextureInfo desc={};desc.width=width;desc.height=height;desc.depth=1;desc.array_length=1;
+  desc.type=WMTTextureType2D;desc.pixel_format=WMTPixelFormatRGBA8Unorm;desc.mipmap_level_count=1;desc.sample_count=1;
+  desc.usage=WMTTextureUsage(WMTTextureUsageRenderTarget|WMTTextureUsageShaderRead);
+  desc.options=WMTResourceStorageModePrivate;
+  Rc<Texture> hidden=new Texture(desc,device_);
+  auto allocation=hidden->allocate(TextureAllocationFlag::GpuPrivate);
+  if(!allocation || !allocation->texture()) return false;
+  hidden->rename(std::move(allocation));
+  base_foveation_map=std::move(map);base_foveation_forward=std::move(forward);
+  base_foveation_inverse=std::move(inverse);base_foveation_pipeline=std::move(pipeline);
+  base_foveation_hidden=std::move(hidden);base_foveation_size=logical;
+  Logger::info(str::format("DXMT base foveation prepared logical=",width,"x",height,
+      " physical=",bundle.physical_size.width,"x",bundle.physical_size.height));
+  return true;
+}
+
 void
 ArgumentEncodingContext::endPass() {
   assert(encoder_current);
+  Rc<Texture> base_target;
+  uint64_t base_view=0;
+  if(encoder_current->type==EncoderType::Render && encoder_last->type==EncoderType::Clear) {
+    auto render=static_cast<RenderEncoderData *>(encoder_current);
+    auto clear=static_cast<ClearEncoderData *>(encoder_last);
+    unsigned draws=0;bool supported=true;
+    if(render->base_foveation_target && !render->rasterization_rate_map && !render->use_visibility_result &&
+        !render->use_geometry && !render->use_tessellation && !render->use_emulated_so &&
+        !clear->clear_dsv && clear->attachment==render->colors[0].attachment &&
+        clear->width==render->render_target_width && clear->height==render->render_target_height && clear->array_length<=1) {
+      for(auto cmd=reinterpret_cast<const wmtcmd_base *>(&render->cmd_head);cmd;
+          cmd=reinterpret_cast<const wmtcmd_base *>(const_cast<WMTMemoryPointer &>(cmd->next).get())) {
+        if(cmd->type==WMTRenderCommandDraw || cmd->type==WMTRenderCommandDrawIndexed) ++draws;
+        else if(cmd->type==WMTRenderCommandDrawIndirect || cmd->type==WMTRenderCommandDrawIndexedIndirect ||
+            cmd->type==WMTRenderCommandDrawMeshThreadgroups || cmd->type==WMTRenderCommandDrawMeshThreadgroupsIndirect ||
+            cmd->type==WMTRenderCommandExecuteCommandsInBuffer || cmd->type==WMTRenderCommandDispatchThreadsPerTile)
+          supported=false;
+      }
+      if(draws==1 && supported && prepareBaseFoveation(render->render_target_width,render->render_target_height)) {
+        base_target=render->base_foveation_target;base_view=render->base_foveation_view;
+        render->colors[0].attachment=access<PipelineStage::Pixel>(base_foveation_hidden,base_foveation_hidden->fullView,ResourceAccess::Write);
+        render->colors[0].load_action=WMTLoadActionClear;render->colors[0].clear_color=clear->color;
+        render->rasterization_rate_map=base_foveation_map;render->rate_map_positions=base_foveation_inverse;
+        render->rate_map_logical_size=base_foveation_size;
+      }
+    }
+  }
   encoder_last->next = encoder_current;
   encoder_last = encoder_current;
 
@@ -744,6 +799,24 @@ ArgumentEncodingContext::endPass() {
 
   encoder_current = nullptr;
   encoder_count_++;
+  if(base_target) {
+    auto compute=static_cast<ComputeEncoderData *>(startComputePass(0));
+    compute->base_foveation_forward=base_foveation_forward;
+    compute->base_foveation_pipeline=base_foveation_pipeline;
+    auto &pso=encodeComputeCommand<wmtcmd_compute_setpso>();
+    pso.type=WMTComputeCommandSetPSO;pso.pso=base_foveation_pipeline;pso.threadgroup_size={8,8,1};
+    auto &src=access(base_foveation_hidden,base_foveation_hidden->fullView,ResourceAccess::Read);
+    auto &dst=access(base_target,base_view,ResourceAccess::Write);
+    auto &src_cmd=encodeComputeCommand<wmtcmd_compute_settexture>();
+    src_cmd.type=WMTComputeCommandSetTexture;src_cmd.index=0;src_cmd.texture=src.texture;
+    auto &dst_cmd=encodeComputeCommand<wmtcmd_compute_settexture>();
+    dst_cmd.type=WMTComputeCommandSetTexture;dst_cmd.index=1;dst_cmd.texture=dst.texture;
+    auto &buffer=encodeComputeCommand<wmtcmd_compute_setbuffer>();
+    buffer.type=WMTComputeCommandSetBuffer;buffer.index=0;buffer.offset=0;buffer.buffer=base_foveation_forward;
+    auto &dispatch=encodeComputeCommand<wmtcmd_compute_dispatch>();
+    dispatch.type=WMTComputeCommandDispatchThreads;dispatch.size={base_foveation_size.width,base_foveation_size.height,1};
+    endPass();
+  }
 }
 
 std::pair<WMT::Buffer, size_t>
@@ -1236,7 +1309,10 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
     case EncoderType::Compute: {
       auto data = static_cast<ComputeEncoderData *>(current);
       auto encoder = cmdbuf.computeCommandEncoder(true);
-      if (encoderLabelsEnabled())
+      if(data->base_foveation_forward) {
+        encoder.setLabel(WMT::String::string("BaseFoveationUnwarp",WMTUTF8StringEncoding));
+        if(sceneTraceEnabled()) sceneTrace("base_foveation_unwarp encoder=%llu",(unsigned long long)data->id);
+      } else if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(computeLabel(data).c_str(), WMTUTF8StringEncoding));
       data->fence_wait.forEach([&](auto id) { encoder.waitForFence(fence_pool_[id]); });
       struct wmtcmd_compute_setbuffer setcmd;
