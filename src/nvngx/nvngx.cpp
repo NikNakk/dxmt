@@ -80,7 +80,7 @@ NVSDK_NGX_D3D11_CreateFeature(
   }
   ngx_trace(str::format("CreateFeature feature=", feature, " context=", context));
   if (!context || !params || !out_handle) return NVNGX_RESULT_INVALID_PARAMETER;
-  auto parameters = static_cast<ParametersImpl *>(params);
+  auto parameters = params;
   Com<IMTLD3D11ContextExt1> pCtxExt = nullptr;
   if (FAILED(context->QueryInterface(IID_PPV_ARGS(&pCtxExt))))
     return NVNGX_RESULT_INVALID_PARAMETER;
@@ -119,6 +119,40 @@ NVSDK_NGX_D3D11_CreateFeature(
   return NVNGX_RESULT_FAIL;
 }
 
+struct NGXRegion {
+  ID3D11Texture2D *source;
+  UINT x=0, y=0, width=0, height=0, storage_width=0, storage_height=0;
+  D3D11_TEXTURE2D_DESC desc={};
+  bool copy=false;
+};
+static unsigned ngx_origin(NVNGXParameter *parameters, const char *name) {
+  unsigned value=0; parameters->Get(name,&value); return value;
+}
+static bool ngx_validate_region(NGXRegion &r) {
+  if (!r.source || !r.width || !r.height || !r.storage_width || !r.storage_height) return false;
+  r.source->GetDesc(&r.desc);
+  if (r.desc.SampleDesc.Count!=1 || r.desc.ArraySize!=1 || r.desc.MipLevels!=1 ||
+      r.desc.Usage!=D3D11_USAGE_DEFAULT || r.width>r.desc.Width || r.height>r.desc.Height ||
+      r.x>r.desc.Width-r.width || r.y>r.desc.Height-r.height ||
+      r.width>r.storage_width || r.height>r.storage_height) return false;
+  r.copy=r.x || r.y || r.desc.Width!=r.storage_width || r.desc.Height!=r.storage_height;
+  return true;
+}
+static HRESULT ngx_prepare_region(ID3D11Device *device, NGXRegion &r, Com<ID3D11Texture2D> &cache) {
+  if (!r.copy) return S_OK;
+  auto desc=r.desc; desc.Width=r.storage_width; desc.Height=r.storage_height;
+  desc.MiscFlags=0; desc.CPUAccessFlags=0;
+  if (cache) {
+    D3D11_TEXTURE2D_DESC old={}; cache->GetDesc(&old);
+    if (old.Width==desc.Width && old.Height==desc.Height && old.Format==desc.Format &&
+        old.BindFlags==desc.BindFlags) return S_OK;
+  }
+  Com<ID3D11Texture2D> replacement;
+  auto hr=device->CreateTexture2D(&desc,nullptr,&replacement);
+  if (SUCCEEDED(hr)) cache=std::move(replacement);
+  return hr;
+}
+
 NVNGX_API NVNGX_RESULT
 NVSDK_NGX_D3D11_EvaluateFeature(
     ID3D11DeviceContext *context, const unsigned int *handle, NVNGXParameter *params, void *callback
@@ -130,26 +164,27 @@ NVSDK_NGX_D3D11_EvaluateFeature(
   if (!context || !handle || !params) return NVNGX_RESULT_INVALID_PARAMETER;
   static std::atomic<uint64_t> evaluations{0};
   uint64_t sequence = ++evaluations;
-  auto parameters = static_cast<ParametersImpl *>(params);
+  auto parameters = params;
   switch (static_cast<CommonFeature *>((void *)handle)->feature) {
   case NVNGX_FEATURE_SUPERSAMPLING: {
     auto dlss = static_cast<DLSSFeature *>((void *)handle);
 
-    IMTLD3D11ContextExt *pCtxExt = nullptr;
+    Com<IMTLD3D11ContextExt> pCtxExt;
     if (FAILED(context->QueryInterface(IID_PPV_ARGS(&pCtxExt))))
       return NVNGX_RESULT_INVALID_PARAMETER;
 
-    ID3D11Texture2D *input, *output, *depth, *mv, *exposure = nullptr;
-
-    if (NVNGX_FAILED(parameters->Get(NVNGX_Parameter_Color, (ID3D11Resource **)&input)))
-      return NVNGX_RESULT_INVALID_PARAMETER;
-    if (NVNGX_FAILED(parameters->Get(NVNGX_Parameter_Output, (ID3D11Resource **)&output)))
-      return NVNGX_RESULT_INVALID_PARAMETER;
-    if (NVNGX_FAILED(parameters->Get(NVNGX_Parameter_Depth, (ID3D11Resource **)&depth)))
-      return NVNGX_RESULT_INVALID_PARAMETER;
-    if (NVNGX_FAILED(parameters->Get(NVNGX_Parameter_MotionVectors, (ID3D11Resource **)&mv)))
-      return NVNGX_RESULT_INVALID_PARAMETER;
-    parameters->Get(NVNGX_Parameter_ExposureTexture, (ID3D11Resource **)&exposure);
+    ID3D11Resource *resources[5]={};
+    const char *resource_keys[]={NVNGX_Parameter_Color,NVNGX_Parameter_Output,NVNGX_Parameter_Depth,
+        NVNGX_Parameter_MotionVectors,NVNGX_Parameter_ExposureTexture};
+    Com<ID3D11Texture2D> textures[5];
+    for(unsigned i=0;i<5;++i) {
+      auto result=parameters->Get(resource_keys[i],&resources[i]);
+      if(i==4 && (NVNGX_FAILED(result) || !resources[i])) continue;
+      if(NVNGX_FAILED(result) || !resources[i] || FAILED(resources[i]->QueryInterface(IID_PPV_ARGS(&textures[i]))))
+        return NVNGX_RESULT_INVALID_PARAMETER;
+    }
+    auto input=textures[0].ptr(), output=textures[1].ptr(), depth=textures[2].ptr(),
+         mv=textures[3].ptr(), exposure=textures[4].ptr();
 
     uint32_t width = 0, height = 0;
     if (NVNGX_FAILED(parameters->Get(NVNGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &width)))
@@ -203,9 +238,53 @@ NVSDK_NGX_D3D11_EvaluateFeature(
         ngx_trace(str::format("  ", key, "=", value, " result=", (unsigned)result));
       }
     }
+    static const bool subrects_enabled=env::getEnvVar("DXMT_NGX_SUBRECTS")=="1";
+    if (!subrects_enabled) { pCtxExt->TemporalUpscale(&desc); return NVNGX_RESULT_OK; }
+    if (!width) width=dlss->width;
+    if (!height) height=dlss->height;
+    desc.InputContentWidth=width; desc.InputContentHeight=height;
+    NGXRegion regions[4]={
+      {input,ngx_origin(parameters,"DLSS.Input.Color.Subrect.Base.X"),ngx_origin(parameters,"DLSS.Input.Color.Subrect.Base.Y"),width,height,dlss->width,dlss->height},
+      {depth,ngx_origin(parameters,"DLSS.Input.Depth.Subrect.Base.X"),ngx_origin(parameters,"DLSS.Input.Depth.Subrect.Base.Y"),width,height,dlss->width,dlss->height},
+      {mv,ngx_origin(parameters,"DLSS.Input.MV.Subrect.Base.X"),ngx_origin(parameters,"DLSS.Input.MV.Subrect.Base.Y"),
+          desc.MotionVectorInDisplayRes ? dlss->target_width : width,
+          desc.MotionVectorInDisplayRes ? dlss->target_height : height,
+          desc.MotionVectorInDisplayRes ? dlss->target_width : dlss->width,
+          desc.MotionVectorInDisplayRes ? dlss->target_height : dlss->height},
+      {output,ngx_origin(parameters,"DLSS.Output.Subrect.Base.X"),ngx_origin(parameters,"DLSS.Output.Subrect.Base.Y"),
+          dlss->target_width,dlss->target_height,dlss->target_width,dlss->target_height}
+    };
+    bool copies=false;
+    for (auto &r:regions) { if (!ngx_validate_region(r)) return NVNGX_RESULT_INVALID_PARAMETER; copies|=r.copy; }
+    if ((regions[3].x || regions[3].y) && !dlss->enable_output_subrects) return NVNGX_RESULT_INVALID_PARAMETER;
+    Com<IMTLD3D11ContextExt2> roi;
+    if (copies && FAILED(context->QueryInterface(IID_PPV_ARGS(&roi)))) return NVNGX_RESULT_FEATURE_NOT_SUPPORTED;
+    Com<ID3D11Device> device; context->GetDevice(&device);
+    for (auto &r:regions) {
+      Com<ID3D11Device> owner; r.source->GetDevice(&owner);
+      if (owner.ptr()!=device.ptr()) return NVNGX_RESULT_INVALID_PARAMETER;
+    }
+    // Allocate every required scratch texture before queuing any copies.
+    for (unsigned i=0;i<4;++i)
+      if (FAILED(ngx_prepare_region(device.ptr(),regions[i],dlss->roi_textures[i]))) return NVNGX_RESULT_FAIL;
+    ID3D11Resource **bindings[]={&desc.Color,&desc.Depth,&desc.MotionVector,&desc.Output};
+    for (unsigned i=0;i<4;++i) if (regions[i].copy) *bindings[i]=dlss->roi_textures[i].ptr();
+    for (unsigned i=0;i<3;++i) if (regions[i].copy) {
+      auto &r=regions[i];
+      if (FAILED(roi->CopyTemporalRegion(r.source,r.x,r.y,dlss->roi_textures[i].ptr(),0,0,r.width,r.height)))
+        return NVNGX_RESULT_FEATURE_NOT_SUPPORTED;
+    }
+    if (ngx_trace_enabled() && (sequence<=32 || sequence%512==0))
+      ngx_trace(str::format("ROI input=",width,"x",height," output=",dlss->target_width,"x",dlss->target_height,
+          " color_origin=",regions[0].x,",",regions[0].y," depth_origin=",regions[1].x,",",regions[1].y,
+          " motion_origin=",regions[2].x,",",regions[2].y," output_origin=",regions[3].x,",",regions[3].y,
+          " motion_source=",regions[2].desc.Width,"x",regions[2].desc.Height," copies=",copies));
     pCtxExt->TemporalUpscale(&desc);
-
-    pCtxExt->Release();
+    if (regions[3].copy) {
+      auto &r=regions[3];
+      if (FAILED(roi->CopyTemporalRegion(dlss->roi_textures[3].ptr(),0,0,output,r.x,r.y,r.width,r.height)))
+        return NVNGX_RESULT_FEATURE_NOT_SUPPORTED;
+    }
 
     return NVNGX_RESULT_OK;
     break;

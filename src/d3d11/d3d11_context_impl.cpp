@@ -658,7 +658,7 @@ public:
       return S_OK;
     }
 
-    if (riid == __uuidof(IMTLD3D11ContextExt) || riid == __uuidof(IMTLD3D11ContextExt1)) {
+    if (riid == __uuidof(IMTLD3D11ContextExt) || riid == __uuidof(IMTLD3D11ContextExt1) || riid == __uuidof(IMTLD3D11ContextExt2)) {
       *ppvObject = ref(&ext_);
       return S_OK;
     }
@@ -5216,7 +5216,7 @@ public:
 };
 
 template <typename ContextInternalState>
-class MTLD3D11ContextExt : public IMTLD3D11ContextExt1 {
+class MTLD3D11ContextExt : public IMTLD3D11ContextExt2 {
   class CachedTemporalScaler {
   public:
     WMTPixelFormat color_pixel_format;
@@ -5242,6 +5242,46 @@ public:
   ULONG STDMETHODCALLTYPE AddRef() final { return ctx_->AddRef(); }
 
   ULONG STDMETHODCALLTYPE Release() final { return ctx_->Release(); }
+
+  HRESULT STDMETHODCALLTYPE CopyTemporalRegion(ID3D11Texture2D *source, UINT x, UINT y,
+      ID3D11Texture2D *destination, UINT dx, UINT dy, UINT width, UINT height) final {
+    if (!source || !destination || source == destination || !width || !height) return E_INVALIDARG;
+    Com<ID3D11Device> owner, source_device, destination_device;
+    ctx_->GetDevice(&owner); source->GetDevice(&source_device); destination->GetDevice(&destination_device);
+    if (owner.ptr() != source_device.ptr() || owner.ptr() != destination_device.ptr()) return E_INVALIDARG;
+    D3D11_TEXTURE2D_DESC a={}, b={}; source->GetDesc(&a); destination->GetDesc(&b);
+    if (a.Format != b.Format || a.SampleDesc.Count != 1 || b.SampleDesc.Count != 1 ||
+        a.ArraySize != 1 || b.ArraySize != 1 || a.MipLevels != 1 || b.MipLevels != 1 ||
+        a.Usage != D3D11_USAGE_DEFAULT || b.Usage != D3D11_USAGE_DEFAULT ||
+        width > a.Width || height > a.Height || x > a.Width-width || y > a.Height-height ||
+        width > b.Width || height > b.Height || dx > b.Width-width || dy > b.Height-height) return E_INVALIDARG;
+    switch (a.Format) {
+      case DXGI_FORMAT_R11G11B10_FLOAT: case DXGI_FORMAT_R16G16B16A16_FLOAT:
+      case DXGI_FORMAT_R32G32B32A32_FLOAT: case DXGI_FORMAT_R8G8B8A8_UNORM:
+      case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_R16G16_FLOAT:
+      case DXGI_FORMAT_R16G16_SINT: case DXGI_FORMAT_R16G16_UINT:
+      case DXGI_FORMAT_R16G16_UNORM: case DXGI_FORMAT_R16G16_SNORM:
+      case DXGI_FORMAT_R32G32_FLOAT: case DXGI_FORMAT_R32G32_SINT: case DXGI_FORMAT_R32G32_UINT:
+      case DXGI_FORMAT_R32_FLOAT: case DXGI_FORMAT_R32_TYPELESS:
+      case DXGI_FORMAT_R32G8X24_TYPELESS: case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+      case DXGI_FORMAT_D32_FLOAT: break;
+      default: return E_NOTIMPL;
+    }
+    std::lock_guard lock(ctx_->mutex);
+    auto src=static_cast<D3D11ResourceCommon *>(static_cast<ID3D11Resource *>(source))->texture();
+    auto dst=static_cast<D3D11ResourceCommon *>(static_cast<ID3D11Resource *>(destination))->texture();
+    if (!src || !dst) return E_INVALIDARG;
+    ctx_->SwitchToBlitEncoder(MTLD3D11DeviceContextImplBase<ContextInternalState>::CommandBufferState::BlitEncoderActive);
+    ctx_->EmitOP([src=std::move(src),dst=std::move(dst),x,y,dx,dy,width,height](ArgumentEncodingContext &enc) mutable {
+      auto a=enc.access(src,0,0,ResourceAccess::Read);
+      auto b=enc.access(dst,0,0,ResourceAccess::Write);
+      auto &copy=enc.encodeBlitCommand<wmtcmd_blit_copy_from_texture_to_texture>();
+      copy.type=WMTBlitCommandCopyFromTextureToTexture;
+      copy.src=a; copy.src_level=copy.src_slice=0; copy.src_origin={x,y,0}; copy.src_size={width,height,1};
+      copy.dst=b; copy.dst_level=copy.dst_slice=0; copy.dst_origin={dx,dy,0};
+    });
+    return S_OK;
+  }
 
   WMTPixelFormat GetCorrectMotionVectorFormat(WMTPixelFormat format) {
     switch (format) {

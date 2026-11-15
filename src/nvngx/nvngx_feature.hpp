@@ -1,6 +1,8 @@
 #pragma once
 #include "nvngx.hpp"
 #include <cstdint>
+#include "com/com_pointer.hpp"
+#include <array>
 
 namespace dxmt {
 
@@ -17,6 +19,7 @@ struct DLSSFeature : CommonFeature {
   int quality;
   int flag;
   int enable_output_subrects;
+  std::array<Com<ID3D11Texture2D>, 4> roi_textures;
 };
 
 }
