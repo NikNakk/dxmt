@@ -206,7 +206,7 @@ IREffect store_at_vec4_array_masked(
 
 IREffect init_input_reg(
   uint32_t with_fnarg_at, uint32_t to_reg, uint32_t mask,
-  bool fix_w_component
+  bool fix_w_component, uint32_t rate_map_argument
 ) {
   // no it doesn't work like this
   // regular input can be masked like .zw
@@ -214,6 +214,40 @@ IREffect init_input_reg(
   // FIXME: it's buggy as hell
   return make_effect_bind([=](context ctx) {
     pvalue arg = ctx.function->getArg(with_fnarg_at);
+    // Optional translation-side correction. Original DXBC remains unchanged.
+    // The zero-header binding is identity for ordinary/unmapped render passes.
+    if(rate_map_argument!=~0u && fix_w_component) {
+      auto &b=ctx.builder;
+      auto lut=ctx.function->getArg(rate_map_argument);
+      auto load=[&](llvm::Value *index) { return b.CreateLoad(ctx.types._float,b.CreateGEP(ctx.types._float,lut,index)); };
+      auto width=load(b.getInt32(0));
+      auto original_block=b.GetInsertBlock();
+      auto mapped=llvm::BasicBlock::Create(ctx.llvm,"rate_map_position",ctx.function);
+      auto join=llvm::BasicBlock::Create(ctx.llvm,"rate_map_position_join",ctx.function);
+      b.CreateCondBr(b.CreateFCmpOGT(width,llvm::ConstantFP::get(ctx.types._float,0)),mapped,join);
+      b.SetInsertPoint(mapped);
+      auto mapped_arg=arg;
+      for(unsigned axis=0;axis<2;++axis) {
+        auto dimension=axis ? load(b.getInt32(1)) : width;
+        auto raw=b.CreateFSub(b.CreateExtractElement(arg,axis),llvm::ConstantFP::get(ctx.types._float,.5));
+        auto last=b.CreateFSub(dimension,llvm::ConstantFP::get(ctx.types._float,1));
+        auto lower=b.CreateSelect(b.CreateFCmpOLT(raw,llvm::ConstantFP::get(ctx.types._float,0)),llvm::ConstantFP::get(ctx.types._float,0),raw);
+        auto clamped=b.CreateSelect(b.CreateFCmpOGT(lower,last),last,lower);
+        auto i=b.CreateFPToUI(clamped,ctx.types._int);
+        auto next=b.CreateSelect(b.CreateICmpULT(i,b.CreateFPToUI(last,ctx.types._int)),b.CreateAdd(i,b.getInt32(1)),i);
+        llvm::Value *base=b.getInt32(4);
+        if(axis) base=b.CreateAdd(base,b.CreateFPToUI(width,ctx.types._int));
+        auto a=load(b.CreateAdd(base,i)), z=load(b.CreateAdd(base,next));
+        auto fraction=b.CreateFSub(clamped,b.CreateUIToFP(i,ctx.types._float));
+        auto logical=b.CreateFAdd(a,b.CreateFMul(b.CreateFSub(z,a),fraction));
+        mapped_arg=b.CreateInsertElement(mapped_arg,logical,axis);
+      }
+      b.CreateBr(join);b.SetInsertPoint(join);
+      auto phi=b.CreatePHI(arg->getType(),2);
+      phi->addIncoming(arg,original_block);phi->addIncoming(mapped_arg,mapped);
+      arg=phi;
+    }
+
     auto const_index =
       llvm::ConstantInt::get(ctx.llvm, llvm::APInt{32, to_reg, false});
     if (arg->getType()->getScalarType()->isIntegerTy()) {

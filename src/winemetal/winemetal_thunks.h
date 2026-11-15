@@ -463,6 +463,11 @@ struct unixcall_mtldevice_newicb {
   obj_handle_t ret;
 };
 
+struct unixcall_rate_map_inverse_positions {
+  obj_handle_t device, map, ret;
+  struct WMTSize logical_size;
+};
+
 #pragma pack(pop)
 
 #endif

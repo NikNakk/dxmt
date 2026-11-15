@@ -260,7 +260,7 @@ IREffect store_at_vec4_array_masked(
 
 IREffect init_input_reg(
   uint32_t with_fnarg_at, uint32_t to_reg, uint32_t mask,
-  bool fix_w_component = false
+  bool fix_w_component = false, uint32_t rate_map_argument = ~0u
 );
 
 IREffect init_input_reg_with_interpolation(
@@ -331,6 +331,7 @@ struct SignatureContext {
   bool skip_vertex_output;
   uint32_t pull_mode_reg_mask;
   uint32_t unorm_output_reg_mask;
+  uint32_t rate_map_position_argument=~0u;
   // it is considered optional (as a hint)
   air::MTLPixelFormat pixel_formats[8];
 

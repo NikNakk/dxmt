@@ -393,7 +393,8 @@ void handle_signature_ps(
     }
     signature_handlers.push_back([=](SignatureContext &ctx) {
       ctx.prologue << init_input_reg(
-        assigned_index, reg, mask, siv == D3D10_SB_NAME_POSITION
+        assigned_index, reg, mask, siv == D3D10_SB_NAME_POSITION,
+        siv == D3D10_SB_NAME_POSITION ? ctx.rate_map_position_argument : ~0u
       );
     });
     max_input_register = std::max(reg + 1, max_input_register);
