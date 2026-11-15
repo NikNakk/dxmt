@@ -2181,4 +2181,6 @@ WINEMETAL_API void MTLTexture_getBytes(
 WINEMETAL_API obj_handle_t MTLDevice_retainRasterizationRateMap(obj_handle_t device, obj_handle_t map);
 WINEMETAL_API obj_handle_t MTLDevice_retainRasterizationRateMapForSize(obj_handle_t device, obj_handle_t map, uint32_t width, uint32_t height);
 
+WINEMETAL_API obj_handle_t MTLDevice_rateMapInversePositions(obj_handle_t device, obj_handle_t map, struct WMTSize *logical_size);
+
 #endif

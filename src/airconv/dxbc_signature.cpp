@@ -413,8 +413,10 @@ void handle_signature_ps(
       break;
     }
     signature_handlers.push_back([=](SignatureContext &ctx) {
+      const uint32_t rate_map_argument =
+          siv == D3D10_SB_NAME_POSITION ? ctx.rate_map_position_argument : ~0u;
       ctx.prologue.Add([=](IOHelper &io) -> llvm::Error {
-        return io.InitializeInput(assigned_index, reg, mask, siv == D3D10_SB_NAME_POSITION);
+        return io.InitializeInput(assigned_index, reg, mask, siv == D3D10_SB_NAME_POSITION, rate_map_argument);
       });
     });
     max_input_register = std::max(reg + 1, max_input_register);

@@ -148,15 +148,24 @@ public:
       if (!handle) return E_INVALIDARG;
       retained = WMT::Reference<WMT::Object>(handle);
     }
+    WMT::Reference<WMT::Buffer> positions;
+    WMTSize logical={};
+    if(map && env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1") {
+      auto buffer=MTLDevice_rateMapInversePositions(m_parent->GetMTLDevice().handle,map,&logical);
+      if(!buffer) return E_INVALIDARG;
+      positions=WMT::Reference<WMT::Buffer>(buffer);
+    }
     InvalidateCurrentPass(true);
-    EmitST([map = std::move(retained)](ArgumentEncodingContext &enc) mutable {
+    EmitST([map = std::move(retained),positions=std::move(positions),logical](ArgumentEncodingContext &enc) mutable {
       enc.rasterization_rate_map = std::move(map);
+      enc.rate_map_positions=std::move(positions);enc.rate_map_logical_size=logical;
     });
     return S_OK;
   }
 
   HRESULT STDMETHODCALLTYPE SetRenderTargetRasterizationRateMap(ID3D11Texture2D *target, UINT64 map) override {
     if (!target) return E_INVALIDARG;
+    if(map && env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1") return E_NOTIMPL;
     std::lock_guard<d3d11_device_mutex> lock(mutex);
     ID3D11Device *owner = nullptr;
     target->GetDevice(&owner);

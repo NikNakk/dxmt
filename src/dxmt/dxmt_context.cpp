@@ -643,6 +643,8 @@ ArgumentEncodingContext::startRenderPass(
   encoder_info->type = EncoderType::Render;
   if (rasterization_rate_map)
     encoder_info->rasterization_rate_map = rasterization_rate_map;
+  encoder_info->rate_map_positions=rate_map_positions;
+  encoder_info->rate_map_logical_size=rate_map_logical_size;
   encoder_info->encoder_id_vertex = nextEncoderId();
   encoder_info->fence_wait_vertex = {};
   encoder_info->fence_update_vertex = {encoder_info->encoder_id_vertex};
@@ -1129,6 +1131,12 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
             unsigned(data->tile_barrier_pso_key.color_formats[i]), unsigned(data->colors[i].level),
             unsigned(data->colors[i].slice), unsigned(data->colors[i].load_action), unsigned(data->colors[i].store_action));
       }
+      static const bool position_mode=env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1";
+      const bool mapped_position=position_mode && data->rate_map_positions &&
+          data->render_target_count==1 && !data->depth.attachment && !data->stencil.attachment &&
+          data->tile_barrier_pso_key.raster_sample_count==1 && data->render_target_array_length<=1 &&
+          data->render_target_width==data->rate_map_logical_size.width && data->render_target_height==data->rate_map_logical_size.height;
+      if(position_mode && !mapped_position) render_pass_info.rasterization_rate_map=0;
       auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
       if (encoderLabelsEnabled())
         encoder.setLabel(WMT::String::string(renderLabel(data).c_str(), WMTUTF8StringEncoding));
@@ -1142,6 +1150,7 @@ ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId
       encoder.setVertexBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_ARGUMENT_TABLE);
       if (data->use_emulated_so)
         encoder.setVertexBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_STREAM_OUTPUT0);
+      if(position_mode) encoder.setFragmentBuffer(mapped_position ? WMT::Buffer(data->rate_map_positions) : WMT::Buffer(dummy_cbuffer_),0,SM50_BINDING_INDEX_RATE_MAP_POSITION);
       encoder.setFragmentBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_CONSTANT_BUFFER);
       encoder.setFragmentBuffer(gpu_buffer_, 0, SM50_BINDING_INDEX_ARGUMENT_TABLE);
       if (data->use_geometry || data->use_tessellation) {
@@ -1661,6 +1670,7 @@ ArgumentEncodingContext::isEncoderSignatureMatched(RenderEncoderData *r0, Render
   // Different maps change physical pixel layout and must never merge.
   if (r0->rasterization_rate_map.handle != r1->rasterization_rate_map.handle)
     return false;
+  if(r0->rate_map_positions.handle!=r1->rate_map_positions.handle) return false;
   // FIXME: it can be different?
   if (r0->render_target_count != r1->render_target_count)
     return false;

@@ -4,6 +4,7 @@
 #import <ColorSync/ColorSync.h>
 #import <CoreFoundation/CFRunLoop.h>
 #import <Metal/Metal.h>
+#import <objc/runtime.h>
 #import <MetalFX/MetalFX.h>
 #import <QuartzCore/QuartzCore.h>
 #include "objc/objc-runtime.h"
@@ -46,6 +47,37 @@ _MTLDevice_retainRasterizationRateMap(void *args) {
         physical.width > size->width || physical.height > size->height) return STATUS_SUCCESS;
   }
   params->ret = (obj_handle_t)[map retain];
+  return STATUS_SUCCESS;
+}
+
+// Immutable single-layer map owns its cached inverse-coordinate buffer.
+static NTSTATUS
+_MTLDevice_rateMapInversePositions(void *args) {
+  struct unixcall_rate_map_inverse_positions *p=args;
+  p->ret=0;
+  id<MTLRasterizationRateMap> map=(id<MTLRasterizationRateMap>)p->map;
+  if(!map || ![map respondsToSelector:@selector(screenSize)] || map.device!=(id<MTLDevice>)p->device || map.layerCount!=1)
+    return STATUS_SUCCESS;
+  MTLSize logical=map.screenSize, physical=[map physicalSizeForLayer:0];
+  if(!physical.width || !physical.height || physical.width>16384 || physical.height>16384) return STATUS_SUCCESS;
+  p->logical_size=(struct WMTSize){logical.width,logical.height,1};
+  static char cache_key;
+  @synchronized((id)map) {
+    id<MTLBuffer> buffer=objc_getAssociatedObject((id)map,&cache_key);
+    if(!buffer) {
+      buffer=[map.device newBufferWithLength:(4+physical.width+physical.height)*sizeof(float) options:MTLResourceStorageModeShared];
+      if(!buffer) return STATUS_SUCCESS;
+      float *values=buffer.contents;
+      values[0]=physical.width;values[1]=physical.height;values[2]=logical.width;values[3]=logical.height;
+      for(NSUInteger i=0;i<physical.width;++i)
+        values[4+i]=[map mapPhysicalToScreenCoordinates:MTLCoordinate2DMake(i+.5f,.5f) forLayer:0].x;
+      for(NSUInteger i=0;i<physical.height;++i)
+        values[4+physical.width+i]=[map mapPhysicalToScreenCoordinates:MTLCoordinate2DMake(.5f,i+.5f) forLayer:0].y;
+      objc_setAssociatedObject((id)map,&cache_key,(id)buffer,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      [buffer release];
+    }
+    p->ret=(obj_handle_t)[buffer retain];
+  }
   return STATUS_SUCCESS;
 }
 
@@ -3792,6 +3824,7 @@ const void *__wine_unix_call_funcs[] = {
     &_WMTHostRemoteLayer,
     &_WMTSetRemoteLayerFrame,
     &_MTLDevice_retainRasterizationRateMap,
+    &_MTLDevice_rateMapInversePositions,
 };
 
 #ifndef DXMT_NATIVE
@@ -3952,5 +3985,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_WMTHostRemoteLayer,
     &_WMTSetRemoteLayerFrame,
     &_MTLDevice_retainRasterizationRateMap,
+    &_MTLDevice_rateMapInversePositions,
 };
 #endif

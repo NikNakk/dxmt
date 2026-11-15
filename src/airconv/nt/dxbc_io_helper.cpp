@@ -122,7 +122,9 @@ IOHelper::StoreAtVec4ArrayMasked(llvm::Value *array, llvm::Value *index, llvm::V
 };
 
 llvm::Error
-IOHelper::InitializeInput(uint32_t with_fnarg_at, uint32_t to_reg, uint32_t mask, bool fix_w_component) {
+IOHelper::InitializeInput(
+    uint32_t with_fnarg_at, uint32_t to_reg, uint32_t mask, bool fix_w_component, uint32_t rate_map_argument
+) {
   llvm::Value *arg = function->getArg(with_fnarg_at);
 
   auto ToInt32 = [this](llvm::Value *Value) -> llvm::Expected<llvm::Value *> {
@@ -163,6 +165,46 @@ IOHelper::InitializeInput(uint32_t with_fnarg_at, uint32_t to_reg, uint32_t mask
       auto w_component = ir.CreateExtractElement(arg, 3);
       auto rcp_w = ir.CreateFDiv(air.getFloat(1.0f), w_component);
       arg = ir.CreateInsertElement(arg, rcp_w, 3);
+    }
+    // Rate-map position translation (opt-in, SM50_SHADER_FLAG_RATE_MAP_POSITION): map a
+    // physical position in a rate-mapped pass back to its logical position through the
+    // inverse lookup table. A zero-width table header leaves ordinary passes unchanged.
+    if (rate_map_argument != ~0u && fix_w_component) {
+      auto lut = function->getArg(rate_map_argument);
+      auto load = [&](llvm::Value *index) {
+        return ir.CreateLoad(types._float, ir.CreateGEP(types._float, lut, index));
+      };
+      auto width = load(ir.getInt32(0));
+      auto original_block = ir.GetInsertBlock();
+      auto mapped = llvm::BasicBlock::Create(ir.getContext(), "rate_map_position", function);
+      auto join = llvm::BasicBlock::Create(ir.getContext(), "rate_map_position_join", function);
+      ir.CreateCondBr(ir.CreateFCmpOGT(width, air.getFloat(0.0f)), mapped, join);
+      ir.SetInsertPoint(mapped);
+      llvm::Value *mapped_arg = arg;
+      for (unsigned axis = 0; axis < 2; ++axis) {
+        auto dimension = axis ? load(ir.getInt32(1)) : width;
+        auto raw = ir.CreateFSub(ir.CreateExtractElement(arg, axis), air.getFloat(0.5f));
+        auto last = ir.CreateFSub(dimension, air.getFloat(1.0f));
+        auto lower = ir.CreateSelect(ir.CreateFCmpOLT(raw, air.getFloat(0.0f)), air.getFloat(0.0f), raw);
+        auto clamped = ir.CreateSelect(ir.CreateFCmpOGT(lower, last), last, lower);
+        auto i = ir.CreateFPToUI(clamped, types._int);
+        auto next = ir.CreateSelect(
+            ir.CreateICmpULT(i, ir.CreateFPToUI(last, types._int)), ir.CreateAdd(i, ir.getInt32(1)), i
+        );
+        llvm::Value *base = ir.getInt32(4);
+        if (axis)
+          base = ir.CreateAdd(base, ir.CreateFPToUI(width, types._int));
+        auto a = load(ir.CreateAdd(base, i)), z = load(ir.CreateAdd(base, next));
+        auto fraction = ir.CreateFSub(clamped, ir.CreateUIToFP(i, types._float));
+        auto logical = ir.CreateFAdd(a, ir.CreateFMul(ir.CreateFSub(z, a), fraction));
+        mapped_arg = ir.CreateInsertElement(mapped_arg, logical, axis);
+      }
+      ir.CreateBr(join);
+      ir.SetInsertPoint(join);
+      auto phi = ir.CreatePHI(arg->getType(), 2);
+      phi->addIncoming(arg, original_block);
+      phi->addIncoming(mapped_arg, mapped);
+      arg = phi;
     }
     return StoreAtVec4ArrayMasked(io.input.ptr_float4, air.getInt(to_reg), arg, mask);
   } else if (arg->getType()->getScalarType()->isHalfTy()) {

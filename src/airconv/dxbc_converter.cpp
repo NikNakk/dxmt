@@ -351,6 +351,12 @@ llvm::Error convert_dxbc_pixel_shader(
 
   {
     SignatureContext sig_ctx(prologue, epilogue, func_signature, resource_map);
+    if(shader_flags & SM50_SHADER_FLAG_RATE_MAP_POSITION) {
+      sig_ctx.rate_map_position_argument=func_signature.DefineInput(air::ArgumentBindingBuffer{
+          .buffer_size={}, .location_index=SM50_BINDING_INDEX_RATE_MAP_POSITION, .array_size=0,
+          .memory_access=air::MemoryAccess::read, .address_space=air::AddressSpace::constant,
+          .type=air::MSLFloat{}, .arg_name="rate_map_inverse_positions", .raster_order_group={}});
+    }
     sig_ctx.dual_source_blending = pso_dual_source_blending;
     sig_ctx.disable_depth_output = pso_disable_depth_output;
     sig_ctx.pull_mode_reg_mask = shader_info->pull_mode_reg_mask;

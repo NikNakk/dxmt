@@ -20,7 +20,8 @@ public:
   IOHelper(llvm::air::AIRBuilder &air, llvm::Function *function, air::AirType &types, io_binding_map &io_legacy);
 
   llvm::Error InitializeInput(
-      uint32_t FromFunctionArgumentIndex, uint32_t ToRegister, uint32_t Mask, bool InvertWComponent = false
+      uint32_t FromFunctionArgumentIndex, uint32_t ToRegister, uint32_t Mask, bool InvertWComponent = false,
+      uint32_t RateMapArgument = ~0u
   );
 
   llvm::Error InitializeInterpolatedInput(

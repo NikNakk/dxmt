@@ -258,6 +258,7 @@ struct SignatureContext {
   uint32_t pull_mode_reg_mask;
   uint32_t unorm_output_reg_mask;
   uint32_t pso_sample_mask;
+  uint32_t rate_map_position_argument=~0u;
   // it is considered optional (as a hint)
   air::MTLPixelFormat pixel_formats[8];
 

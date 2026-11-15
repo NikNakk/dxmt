@@ -1440,3 +1440,12 @@ MTLDevice_retainRasterizationRateMapForSize(obj_handle_t device, obj_handle_t ma
   UNIX_CALL(155, &params);
   return params.ret;
 }
+
+WINEMETAL_API obj_handle_t
+MTLDevice_rateMapInversePositions(obj_handle_t device, obj_handle_t map, struct WMTSize *logical_size) {
+  struct unixcall_rate_map_inverse_positions params = {0};
+  params.device=device; params.map=map;
+  UNIX_CALL(156,&params);
+  if(logical_size) *logical_size=params.logical_size;
+  return params.ret;
+}
