@@ -24,6 +24,7 @@ struct TextureDescirptor {
   llvm::air::Texture::ResourceKind ResourceKindLogical;
   llvm::air::Texture::MemoryAccess MemoryAccess;
   llvm::air::Texture::SampleType SampleType;
+  uint32_t SM50Slot = ~0u;
 
 };
 

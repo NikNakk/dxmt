@@ -206,6 +206,7 @@ enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE {
   SM50_SHADER_PSO_TESSELLATOR = 7,
   SM50_SHADER_ROOT_SIGNATURE = 8,
   SM50_SHADER_ROOT_SIGNATURE2 = 9,
+  SM50_SHADER_RATE_MAP_READ_MASK = 10,
   SM50_SHADER_ARGUMENT_TYPE_MAX = 0xffffffff,
 };
 
@@ -260,6 +261,13 @@ struct SM50_SHADER_PSO_PIXEL_SHADER_DATA {
   uint32_t unorm_output_reg_mask;
   /** MTLPixelFormat */
   uint32_t pixel_formats[8];
+};
+
+// Pixel shader specialization: bits identify SRV slots actually translated at a draw.
+struct SM50_SHADER_RATE_MAP_READ_MASK_DATA {
+  void *next;
+  enum SM50_SHADER_COMPILATION_ARGUMENT_TYPE type;
+  uint32_t slots[4];
 };
 
 struct SM50_IA_INPUT_ELEMENT {

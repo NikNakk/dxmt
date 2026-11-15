@@ -5,6 +5,8 @@
 #include "d3d11_shader.hpp"
 #include "log/log.hpp"
 #include <atomic>
+#include <bit>
+#include <mutex>
 
 namespace dxmt {
 
@@ -18,7 +20,7 @@ public:
         topology_class(pDesc->TopologyClass), device_(pDevice),
         pBlendState(pDesc->BlendState),
         RasterizationEnabled(pDesc->RasterizationEnabled),
-        SampleCount(pDesc->SampleCount) {
+        SampleCount(pDesc->SampleCount), original_desc_(*pDesc) {
     uint32_t unorm_output_reg_mask = 0;
     for (unsigned i = 0; i < num_rtvs; i++) {
       rtv_formats[i] = pDesc->ColorAttachmentFormats[i];
@@ -38,7 +40,7 @@ public:
       PixelShader = pDesc->PixelShader->get_shader(ShaderVariantPixel{
           pDesc->SampleMask, pDesc->BlendState->IsDualSourceBlending(),
           depth_stencil_format == WMTPixelFormatInvalid,
-          unorm_output_reg_mask, pDesc->RateMapRead});
+          unorm_output_reg_mask, pDesc->RateMapRead, pDesc->ReadSlots});
       ps_valid_render_targets = pDesc->PixelShader->reflection().PSValidRenderTargets;
     } else {
       PixelShader = nullptr;
@@ -49,6 +51,39 @@ public:
   void GetPipeline(MTL_COMPILED_GRAPHICS_PIPELINE *pPipeline) final {
     ready_.wait(false, std::memory_order_acquire);
     *pPipeline = {state_};
+  }
+
+  void GetReadMaskPipeline(const std::array<uint32_t, 4> &requested,
+                           MTL_COMPILED_GRAPHICS_PIPELINE *out, uint32_t *kept, uint32_t *pruned) override {
+    *out = {}; *kept = *pruned = 0;
+    if (!original_desc_.PixelShader || original_desc_.SOLayout) return;
+    std::array<uint32_t, 4> used{};
+    auto shader = original_desc_.PixelShader;
+    for (uint32_t i = 0; i < shader->reflection().NumArguments; ++i) {
+      const auto &arg = shader->arguments_info()[i];
+      if (arg.Type != SM50BindingType::SRV || !(arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE)) continue;
+      if (arg.SM50BindingSlot >= 128) return;
+      used[arg.SM50BindingSlot / 32] |= 1u << (arg.SM50BindingSlot % 32);
+    }
+    auto mask = used;
+    for (unsigned i = 0; i < 4; ++i) {
+      mask[i] &= requested[i];
+      *kept += std::popcount(mask[i]);
+      *pruned += std::popcount(used[i] & ~mask[i]);
+    }
+    {
+      std::lock_guard<std::mutex> lock(mask_mutex_);
+      if (std::find(read_masks_.begin(), read_masks_.end(), mask) == read_masks_.end()) {
+        if (read_masks_.size() >= 32) return;
+        read_masks_.push_back(mask);
+      }
+    }
+    auto desc = original_desc_;
+    desc.ReadSlots = mask;
+    desc.RateMapRead = true; // Unknown binding ranges must retain their dynamic fallback, even for mask zero.
+    MTLCompiledGraphicsPipeline *variant = nullptr;
+    device_->CreateGraphicsPipeline(&desc, &variant);
+    if (variant) variant->GetPipeline(out);
   }
 
   ThreadpoolWork *RunThreadpoolWork() {
@@ -129,6 +164,10 @@ private:
   WMT::Reference<WMT::RenderPipelineState> state_;
   bool RasterizationEnabled;
   UINT SampleCount;
+  // Same device-cache ownership as the original managed shaders and blend state.
+  MTL_GRAPHICS_PIPELINE_DESC original_desc_;
+  std::mutex mask_mutex_;
+  std::vector<std::array<uint32_t, 4>> read_masks_;
 };
 
 std::unique_ptr<MTLCompiledGraphicsPipeline>

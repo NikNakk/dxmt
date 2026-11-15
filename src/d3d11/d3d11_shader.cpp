@@ -198,6 +198,12 @@ CreateVariantShader(MTLD3D11Device *pDevice, ManagedShader shader,
   h.update(variant.unorm_output_reg_mask);
   h.update(variant.dual_source_blending);
   h.update(variant.disable_depth_output);
+  const bool read_masked = variant.rate_map_read &&
+      variant.read_slots != std::array<uint32_t, 4>{~0u, ~0u, ~0u, ~0u};
+  if (read_masked) {
+    h.update(uint32_t{0x52534d31}); // Specialization epoch, distinct from historical full variants.
+    for (auto word : variant.read_slots) h.update(word);
+  }
   auto variant_digest = h.final();
   std::string func_name = "ps_" + shader->sha1().string().substr(0, 8) + "_" + variant_digest.string();
 
@@ -205,6 +211,13 @@ CreateVariantShader(MTLD3D11Device *pDevice, ManagedShader shader,
     SM50_SHADER_PSO_PIXEL_SHADER_DATA data;
     data.type = SM50_SHADER_PSO_PIXEL_SHADER;
     data.next = common;
+    SM50_SHADER_RATE_MAP_READ_MASK_DATA mask{};
+    if (read_masked) {
+      mask.type = SM50_SHADER_RATE_MAP_READ_MASK;
+      mask.next = common;
+      std::copy(variant.read_slots.begin(), variant.read_slots.end(), mask.slots);
+      data.next = &mask;
+    }
     data.sample_mask = variant.sample_mask;
     data.dual_source_blending = variant.dual_source_blending;
     data.disable_depth_output = variant.disable_depth_output;

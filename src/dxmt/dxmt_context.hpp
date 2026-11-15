@@ -37,6 +37,7 @@
 #include "rc/util_rc_ptr.hpp"
 #include "airconv_public.h"
 #include <cassert>
+#include <functional>
 
 #define DXMT_IMPLEMENT_ME __builtin_unreachable();
 #define DXMT_UNREACHABLE __builtin_unreachable();
@@ -185,6 +186,15 @@ struct RenderEncoderStencilAttachmentData {
   uint8_t clear_stencil;
 };
 
+struct ResourceReadPipeline {
+  WMT::RenderPipelineState pipeline = {};
+  uint32_t kept = 0, pruned = 0;
+};
+using ResourceReadFactory = std::function<ResourceReadPipeline(const std::array<uint32_t, 4> &)>;
+struct ResourceReadStats {
+  uint64_t draws = 0, kept = 0, pruned = 0, mixed = 0, fallback = 0;
+};
+
 struct RenderEncoderData : EncoderData {
   Rc<Texture> base_foveation_target;
   uint64_t base_foveation_view=0;
@@ -197,6 +207,10 @@ struct RenderEncoderData : EncoderData {
   Rc<Texture> rate_map_depth_target;
   bool rate_map_excluded = false;
   WMT::Reference<WMT::Buffer> rate_map_read;
+  std::array<uint32_t, 4> current_read_slots = {};
+  ResourceReadFactory resource_read_factory;
+  WMT::RenderPipelineState resource_read_full_pso = {};
+  ResourceReadStats resource_read_stats;
   std::array<RenderEncoderColorAttachmentData, 8> colors;
   RenderEncoderDepthAttachmentData depth;
   RenderEncoderStencilAttachmentData stencil;

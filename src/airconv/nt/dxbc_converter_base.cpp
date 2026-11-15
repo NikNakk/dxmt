@@ -432,9 +432,12 @@ Converter::LoadTexture(const SrcOperandResource &SrcOp) {
   texture.memory_access = descriptor->MemoryAccess;
   texture.sample_type = descriptor->SampleType;
 
+  int mode = -1;
+  if (ctx.rate_map_read_specialized && descriptor->SM50Slot < 128)
+    mode = (ctx.rate_map_read_slots[descriptor->SM50Slot / 32] >> (descriptor->SM50Slot % 32)) & 1;
   return llvm::Optional<TextureResourceHandle>(
       {texture, descriptor->ResourceKindLogical, descriptor->ResourceHandle, descriptor->Metadata, SrcOp.read_swizzle,
-       descriptor->GlobalCoherent && SupportsMemoryCoherency()}
+       descriptor->GlobalCoherent && SupportsMemoryCoherency(), mode}
   );
 }
 
@@ -1433,7 +1436,7 @@ Converter::operator()(const InstLoad &load) {
     auto Temp = std::get_if<SrcOperandTemp>(&load.src_address);
     const bool OwnPixel = Temp && Temp->regid == pixel_coord_temp && Temp->phase == ~0u && Temp->_.swizzle.x == 0 &&
                           Temp->_.swizzle.y == 1 && !Temp->_.abs && !Temp->_.neg && Offset->isNullValue();
-    Address = RateMapTexel(Address, Tex->Metadata, OwnPixel);
+    Address = RateMapTexel(Address, Tex->Metadata, OwnPixel, Tex->RateMapMode);
     break;
   }
   default:
@@ -1630,8 +1633,11 @@ Converter::RateMapTexelTable(llvm::Value *Address) {
 // pass's map (second metadata bit), the untranslated position already is the
 // physical texel, so neither table is consulted.
 llvm::Value *
-Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized, bool OwnPixel) {
-  auto Mapped = RateMapMapped(Metadata);
+Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized, bool OwnPixel, int Mode) {
+  if (ctx.rate_map_read_argument == ~0u) return Original;
+  if (Mode == 0) { ++res.rate_map_pruned_ops; return Original; }
+  if (Mode == 1) ++res.rate_map_forced_ops;
+  auto Mapped = Mode == 1 ? ir.getTrue() : RateMapMapped(Metadata);
   if (!Mapped)
     return Original;
   if (OwnPixel && res.rate_map_raw_position) {
@@ -1657,13 +1663,13 @@ Converter::RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Norm
 }
 
 llvm::Value *
-Converter::RateMapTexel(llvm::Value *Address, llvm::Value *Metadata, bool OwnPixel) {
-  return RateMapBranch(Address, Metadata, false, OwnPixel);
+Converter::RateMapTexel(llvm::Value *Address, llvm::Value *Metadata, bool OwnPixel, int Mode) {
+  return RateMapBranch(Address, Metadata, false, OwnPixel, Mode);
 }
 
 llvm::Value *
-Converter::RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata) {
-  return RateMapBranch(Coord, Metadata, true);
+Converter::RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata, int Mode) {
+  return RateMapBranch(Coord, Metadata, true, false, Mode);
 }
 
 llvm::Value *
@@ -1713,7 +1719,7 @@ Converter::operator()(const InstSample &sample) {
   case Texture::depth2d:
   case Texture::texture2d:
     Coord = LoadOperand(sample.src_address, kMaskVecXY);
-    Coord = RateMapCoord(Coord, Tex->Metadata);
+    Coord = RateMapCoord(Coord, Tex->Metadata, Tex->RateMapMode);
     break;
   case Texture::depth2d_array:
   case Texture::texture2d_array:
@@ -1779,7 +1785,7 @@ Converter::operator()(const InstSampleLOD &sample) {
   case Texture::depth2d:
   case Texture::texture2d:
     Coord = LoadOperand(sample.src_address, kMaskVecXY);
-    Coord = RateMapCoord(Coord, Tex->Metadata);
+    Coord = RateMapCoord(Coord, Tex->Metadata, Tex->RateMapMode);
     break;
   case Texture::depth2d_array:
   case Texture::texture2d_array:

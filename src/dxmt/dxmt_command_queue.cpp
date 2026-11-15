@@ -280,11 +280,11 @@ CommandQueue::WaitForFinishThread() {
 
     if(chunk.audit.active){
       auto &a=chunk.audit;
-      tbdrAuditLog("cb queue=%p seq=%llu frame=%llu gpu_start_ns=%llu gpu_end_ns=%llu status=%u init_wait=%u render_before=%llu render_after=%llu clear_before=%llu clear_after=%llu resolve_before=%llu resolve_after=%llu compute=%llu blit=%llu temporal=%llu present=%llu mapped_render=%llu read_ordinary=%llu read_capable=%llu signals=%llu waits=%llu timestamps=%llu fence_waits=%llu load_proxy=%llu store_proxy=%llu resolve_proxy=%llu shaderwrite_proxy=%llu pfv_proxy=%llu unknown_formats=%llu reject_map=%llu reject_layout=%llu reject_argbuf=%llu reject_attachment=%llu reject_action=%llu reject_dependency=%llu blit_ops=%llu texture_copies=%llu buffer_copies=%llu prepare_ms=%.6f encode_ms=%.6f",
+      tbdrAuditLog("cb queue=%p seq=%llu frame=%llu gpu_start_ns=%llu gpu_end_ns=%llu status=%u init_wait=%u render_before=%llu render_after=%llu clear_before=%llu clear_after=%llu resolve_before=%llu resolve_after=%llu compute=%llu blit=%llu temporal=%llu present=%llu mapped_render=%llu read_ordinary=%llu read_capable=%llu read_mask_draws=%llu read_mask_kept=%llu read_mask_pruned=%llu read_mask_mixed=%llu read_mask_fallback=%llu signals=%llu waits=%llu timestamps=%llu fence_waits=%llu load_proxy=%llu store_proxy=%llu resolve_proxy=%llu shaderwrite_proxy=%llu pfv_proxy=%llu unknown_formats=%llu reject_map=%llu reject_layout=%llu reject_argbuf=%llu reject_attachment=%llu reject_action=%llu reject_dependency=%llu blit_ops=%llu texture_copies=%llu buffer_copies=%llu prepare_ms=%.6f encode_ms=%.6f",
         this,(unsigned long long)chunk.chunk_id,(unsigned long long)chunk.frame_,
         (unsigned long long)chunk.attached_cmdbuf.gpuStartTime(),(unsigned long long)chunk.attached_cmdbuf.gpuEndTime(),
         unsigned(chunk.attached_cmdbuf.status()),unsigned(chunk.resource_initializer_event_id!=0),
-        a.render_before,a.render_after,a.clear_before,a.clear_after,a.resolve_before,a.resolve_after,a.compute,a.blit,a.temporal,a.present,a.mapped_render,a.read_ordinary,a.read_capable,
+        a.render_before,a.render_after,a.clear_before,a.clear_after,a.resolve_before,a.resolve_after,a.compute,a.blit,a.temporal,a.present,a.mapped_render,a.read_ordinary,a.read_capable,a.read_mask_draws,a.read_mask_kept,a.read_mask_pruned,a.read_mask_mixed,a.read_mask_fallback,
         a.signals,a.waits,a.timestamps,a.fence_waits,a.load_proxy,a.store_proxy,a.resolve_proxy,a.shaderwrite_proxy,a.pfv_proxy,a.unknown_formats,
         a.merge_map,a.merge_layout,a.merge_argbuf,a.merge_attachment,a.merge_action,a.merge_dependency,a.blit_ops,a.texture_copies,a.buffer_copies,a.prepare_ms,a.encode_ms);
     }

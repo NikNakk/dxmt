@@ -34,6 +34,7 @@ struct TBDRAuditStats {
  uint64_t render_before=0,clear_before=0,resolve_before=0;
  uint64_t mapped_render=0;
  uint64_t read_ordinary=0,read_capable=0;
+ uint64_t read_mask_draws=0,read_mask_kept=0,read_mask_pruned=0,read_mask_mixed=0,read_mask_fallback=0;
  uint64_t render_after=0,clear_after=0,resolve_after=0,compute=0,blit=0,temporal=0,present=0;
  uint64_t signals=0,waits=0,timestamps=0,fence_waits=0;
  uint64_t load_proxy=0,store_proxy=0,resolve_proxy=0,shaderwrite_proxy=0,pfv_proxy=0,unknown_formats=0;

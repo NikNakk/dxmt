@@ -4903,7 +4903,7 @@ public:
     static const bool selective_read = env::getEnvVar("DXMT_RATE_MAP_SELECTIVE_READ") == "1" &&
         env::getEnvVar("DXMT_RATE_MAP_POSITION") == "1" &&
         env::getEnvVar("DXMT_RATE_MAP_DIAGNOSTIC_SHADER_MASK").empty();
-    if (selective_read && pipelineDesc.PixelShader) {
+    if (selective_read && env::getEnvVar("DXMT_RATE_MAP_RESOURCE_READ") != "1" && pipelineDesc.PixelShader) {
       pipelineDesc.RateMapRead = false;
       device->CreateGraphicsPipeline(&pipelineDesc, &pipeline_no_read);
     }
@@ -4922,7 +4922,11 @@ public:
             unsigned(depth.StencilWriteMask), sample_mask);
       });
     }
-    EmitST([pso = std::move(pipeline), pipeline_no_read](ArgumentEncodingContext& enc) {
+    const bool resource_read = env::getEnvVar("DXMT_RATE_MAP_RESOURCE_READ") == "1" &&
+        env::getEnvVar("DXMT_RATE_MAP_POSITION") == "1" &&
+        env::getEnvVar("DXMT_RATE_MAP_DIAGNOSTIC_SHADER_MASK").empty() &&
+        pipelineDesc.PixelShader && !pipelineDesc.SOLayout;
+    EmitST([pso = std::move(pipeline), pipeline_no_read, resource_read](ArgumentEncodingContext& enc) {
       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
       pso->GetPipeline(&GraphicsPipeline); // may block
       if (!GraphicsPipeline.PipelineState)
@@ -4931,6 +4935,16 @@ public:
       cmd.type = WMTRenderCommandSetPSO;
       cmd.pso = GraphicsPipeline.PipelineState;
       enc.currentRenderEncoder()->last_pso = GraphicsPipeline.PipelineState;
+      enc.currentRenderEncoder()->resource_read_factory = {};
+      enc.currentRenderEncoder()->resource_read_full_pso = GraphicsPipeline.PipelineState;
+      if (resource_read) {
+        enc.currentRenderEncoder()->resource_read_factory = [pso](const std::array<uint32_t, 4> &mask) {
+          MTL_COMPILED_GRAPHICS_PIPELINE selected{};
+          uint32_t kept = 0, pruned = 0;
+          pso->GetReadMaskPipeline(mask, &selected, &kept, &pruned);
+          return ResourceReadPipeline{selected.PipelineState, kept, pruned};
+        };
+      }
       if (pipeline_no_read) {
         MTL_COMPILED_GRAPHICS_PIPELINE ordinary{};
         pipeline_no_read->GetPipeline(&ordinary);
@@ -5061,6 +5075,28 @@ public:
     } else {
       UploadShaderStageResourceBinding<PipelineStage::Vertex, PipelineKind::Ordinary>();
       UploadShaderStageResourceBinding<PipelineStage::Pixel, PipelineKind::Ordinary>();
+    }
+    // Snapshot after the current draw's actual binding metadata is encoded.
+    // Include a PSO command even when only SRVs changed and the original PSO stayed ready.
+    static const bool resource_mask_enabled = env::getEnvVar("DXMT_RATE_MAP_RESOURCE_READ") == "1";
+    if (resource_mask_enabled && status == DrawCallStatus::Ordinary) {
+      EmitST([](ArgumentEncodingContext &enc) {
+        auto render = enc.currentRenderEncoder();
+        if (!render->resource_read_factory) return;
+        // Resolve while recording, under the same device-cache lifetime as normal PSO binds.
+        auto selected = render->resource_read_factory(render->current_read_slots);
+        auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
+        cmd.type = WMTRenderCommandSetPSO;
+        cmd.pso = selected.pipeline ? selected.pipeline : render->resource_read_full_pso;
+        render->last_pso = WMT::RenderPipelineState(cmd.pso); // Tile-barrier recovery uses this draw's pipeline.
+        auto &stats = render->resource_read_stats;
+        if (selected.pipeline) {
+          ++stats.draws;
+          stats.kept += selected.kept;
+          stats.pruned += selected.pruned;
+          stats.mixed += selected.kept != 0 && selected.pruned != 0;
+        } else ++stats.fallback;
+      });
     }
     // Bounded diagnostic snapshots every PreDraw, including state-only changes.
     static const bool draw_state_audit = env::getEnvVar("DXMT_TBDR_DRAW_STATE") == "1";
