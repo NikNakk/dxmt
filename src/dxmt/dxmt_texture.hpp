@@ -282,6 +282,8 @@ public:
     return info_.mipmap_level_count;
   }
 
+  // Encode-thread-only state. Render passes retain immutable snapshots.
+  WMT::Reference<WMT::Object> rasterization_rate_map;
   TextureViewKey fullView;
 
   Rc<TextureAllocation> allocate(Flags<TextureAllocationFlag> flags);

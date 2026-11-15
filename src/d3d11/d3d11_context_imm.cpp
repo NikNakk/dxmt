@@ -74,7 +74,7 @@ ImmediateContextBase::GetDynamicBufferAllocation(Rc<DynamicBuffer> &dynamic) {
   return {dynamic->immediateName().ptr(), dynamic->immediateSuballocation()};
 }
 
-class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1 {
+class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1, public IDXMTNativeContext2 {
 public:
   MTLD3D11ImmediateContext(MTLD3D11Device *pDevice, CommandQueue &cmd_queue) :
       ImmediateContextBase(pDevice, ctx_state, pDevice->mutex),
@@ -97,6 +97,11 @@ public:
 
     *ppvObject = nullptr;
 
+    if (riid == DXMT_IID_NATIVE_CONTEXT2) {
+      *ppvObject = static_cast<IDXMTNativeContext2 *>(this);
+      AddRef();
+      return S_OK;
+    }
     if (riid == DXMT_IID_NATIVE_CONTEXT1) {
       *ppvObject = static_cast<IDXMTNativeContext1 *>(this);
       AddRef();
@@ -146,6 +151,33 @@ public:
     InvalidateCurrentPass(true);
     EmitST([map = std::move(retained)](ArgumentEncodingContext &enc) mutable {
       enc.rasterization_rate_map = std::move(map);
+    });
+    return S_OK;
+  }
+
+  HRESULT STDMETHODCALLTYPE SetRenderTargetRasterizationRateMap(ID3D11Texture2D *target, UINT64 map) override {
+    if (!target) return E_INVALIDARG;
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+    ID3D11Device *owner = nullptr;
+    target->GetDevice(&owner);
+    bool own = owner == static_cast<ID3D11Device *>(m_parent);
+    if (owner) owner->Release();
+    if (!own) return E_INVALIDARG;
+    D3D11_TEXTURE2D_DESC desc;
+    target->GetDesc(&desc);
+    if (desc.Usage != D3D11_USAGE_DEFAULT || desc.ArraySize != 1 || desc.MipLevels != 1 ||
+        desc.SampleDesc.Count != 1 || !(desc.BindFlags & D3D11_BIND_RENDER_TARGET)) return E_INVALIDARG;
+    auto texture = GetTexture(target);
+    if (!texture) return E_INVALIDARG;
+    WMT::Reference<WMT::Object> retained;
+    if (map) {
+      auto handle = MTLDevice_retainRasterizationRateMapForSize(m_parent->GetMTLDevice().handle, map, desc.Width, desc.Height);
+      if (!handle) return E_INVALIDARG;
+      retained = WMT::Reference<WMT::Object>(handle);
+    }
+    InvalidateCurrentPass(true);
+    EmitST([texture = std::move(texture), map = std::move(retained)](ArgumentEncodingContext &enc) mutable {
+      texture->rasterization_rate_map = std::move(map);
     });
     return S_OK;
   }

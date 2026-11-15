@@ -4554,6 +4554,10 @@ public:
           }
           auto &color = info.colors[rtv.RenderTargetIndex];
           color.attachment = ctx.access<PipelineStage::Pixel>(rtv.Texture, rtv.viewId, ResourceAccess::ReadWrite);
+          // Opt-in direct-to-image path: only this tagged resource receives
+          // the map. Shadow/UI/unrelated targets remain ordinary render passes.
+          if (rtvs.size() == 1 && !dsv.Texture && rtv.Texture->rasterization_rate_map)
+            info.rasterization_rate_map = rtv.Texture->rasterization_rate_map;
           color.depth_plane = rtv.DepthPlane;
           color.load_action = WMTLoadActionLoad;
           color.store_action = WMTStoreActionStore;
