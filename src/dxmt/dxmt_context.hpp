@@ -184,6 +184,7 @@ struct RenderEncoderStencilAttachmentData {
 };
 
 struct RenderEncoderData : EncoderData {
+  WMT::Reference<WMT::Object> rasterization_rate_map;
   std::array<RenderEncoderColorAttachmentData, 8> colors;
   RenderEncoderDepthAttachmentData depth;
   RenderEncoderStencilAttachmentData stencil;
@@ -688,6 +689,9 @@ public:
       Rc<Texture> &&texture, uint64_t viewId, unsigned arrayLength, unsigned flag, float depth, uint8_t stencil
   );
   void resolveTexture(Rc<Texture> &&src, TextureViewKey src_view, Rc<Texture> &&dst, TextureViewKey dst_view);
+
+  // Encode-thread state. Each render pass retains its own immutable snapshot.
+  WMT::Reference<WMT::Object> rasterization_rate_map;
 
   RenderEncoderData *startRenderPass(
       uint8_t dsv_planar_flags, uint8_t dsv_readonly_flags, uint8_t render_target_count, uint64_t argument_buffer_size

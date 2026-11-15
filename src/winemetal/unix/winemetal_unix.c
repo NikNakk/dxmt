@@ -28,6 +28,21 @@ execute_on_main(dispatch_block_t block) {
 }
 
 static NTSTATUS
+_MTLDevice_retainRasterizationRateMap(void *args) {
+  struct unixcall_mtldevice_retainobject *params = args;
+  params->ret = 0;
+  id object = (id)params->object;
+  if (!object || ![object respondsToSelector:@selector(physicalSizeForLayer:)] ||
+      ![object respondsToSelector:@selector(screenSize)] ||
+      ![object respondsToSelector:@selector(layerCount)] ||
+      ![object respondsToSelector:@selector(device)]) return STATUS_SUCCESS;
+  id<MTLRasterizationRateMap> map = object;
+  if (map.device != (id<MTLDevice>)params->device || map.layerCount != 1) return STATUS_SUCCESS;
+  params->ret = (obj_handle_t)[map retain];
+  return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 _NSObject_retain(NSObject **obj) {
   [*obj retain];
   return STATUS_SUCCESS;
@@ -461,6 +476,7 @@ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
   descriptor.renderTargetHeight = info->render_target_height;
   descriptor.renderTargetWidth = info->render_target_width;
   descriptor.visibilityResultBuffer = (id<MTLBuffer>)info->visibility_buffer;
+  descriptor.rasterizationRateMap = (id<MTLRasterizationRateMap>)info->rasterization_rate_map;
 
   if (info->tile_height && info->tile_width) {
     descriptor.tileWidth = info->tile_width;
@@ -3750,6 +3766,7 @@ const void *__wine_unix_call_funcs[] = {
     &_WMTRemoteLayerContextId,
     &_WMTHostRemoteLayer,
     &_WMTSetRemoteLayerFrame,
+    &_MTLDevice_retainRasterizationRateMap,
 };
 
 #ifndef DXMT_NATIVE
@@ -3909,5 +3926,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_WMTRemoteLayerContextId,
     &_WMTHostRemoteLayer,
     &_WMTSetRemoteLayerFrame,
+    &_MTLDevice_retainRasterizationRateMap,
 };
 #endif

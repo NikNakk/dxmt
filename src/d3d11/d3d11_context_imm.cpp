@@ -1,3 +1,4 @@
+#include "dxmt_native_interop.h"
 #include <chrono>
 #include <unordered_map>
 #include "config/config.hpp"
@@ -72,13 +73,13 @@ ImmediateContextBase::GetDynamicBufferAllocation(Rc<DynamicBuffer> &dynamic) {
   return {dynamic->immediateName().ptr(), dynamic->immediateSuballocation()};
 }
 
-class MTLD3D11ImmediateContext : public ImmediateContextBase {
+class MTLD3D11ImmediateContext : public ImmediateContextBase, public IDXMTNativeContext1 {
 public:
   MTLD3D11ImmediateContext(MTLD3D11Device *pDevice, CommandQueue &cmd_queue) :
       ImmediateContextBase(pDevice, ctx_state, pDevice->mutex),
       cmd_queue(cmd_queue),
       ctx_state({cmd_queue}),
-      d3dmt_(this, mutex) {
+      d3dmt_(static_cast<ID3D11DeviceContext *>(this), mutex) {
         cmd_queue.ownership_diagnostics = mutex.ownership_diagnostics;
         ignore_map_flag_no_wait_ = Config::getInstance().getOption<bool>("d3d11.ignoreMapFlagNoWait", false);
       }
@@ -94,6 +95,12 @@ public:
       return E_POINTER;
 
     *ppvObject = nullptr;
+
+    if (riid == DXMT_IID_NATIVE_CONTEXT1) {
+      *ppvObject = static_cast<IDXMTNativeContext1 *>(this);
+      AddRef();
+      return S_OK;
+    }
 
     if (riid == __uuidof(ID3D11Multithread)) {
       *ppvObject = ref(&d3dmt_);
@@ -120,6 +127,21 @@ public:
       this->m_parent->Release();
 
     return refCount;
+  }
+
+  HRESULT STDMETHODCALLTYPE SetRasterizationRateMap(UINT64 map) override {
+    std::lock_guard<d3d11_device_mutex> lock(mutex);
+    WMT::Reference<WMT::Object> retained;
+    if (map) {
+      auto handle = MTLDevice_retainRasterizationRateMap(m_parent->GetMTLDevice().handle, map);
+      if (!handle) return E_INVALIDARG;
+      retained = WMT::Reference<WMT::Object>(handle);
+    }
+    InvalidateCurrentPass(true);
+    EmitST([map = std::move(retained)](ArgumentEncodingContext &enc) mutable {
+      enc.rasterization_rate_map = std::move(map);
+    });
+    return S_OK;
   }
 
   void *

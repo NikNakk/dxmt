@@ -70,6 +70,19 @@ static const GUID DXMT_IID_NATIVE_DEVICE4 = {
 struct IDXMTNativeDevice4 : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE EndFrame() = 0;
 };
+/* Experimental in-process, immediate-context-only rendering extension.
+ * map is a borrowed MTLRasterizationRateMap on this device with one layer.
+ * Retains it synchronously and snapshots it in command order for subsequent
+ * draw passes; zero disables the map. Caller supplies compatible attachments,
+ * logical viewports/scissors and handles reconstruction before ordinary texture
+ * sampling. This does not foveate an unmodified renderer automatically.
+ * Deferred command lists and layered rate maps are outside this first proof. */
+static const GUID DXMT_IID_NATIVE_CONTEXT1 = {
+    0x0a17f61b, 0x61e9, 0x488c,
+    {0xa6, 0x7d, 0x53, 0xe1, 0xf4, 0x9c, 0x07, 0xb8}};
+struct IDXMTNativeContext1 : public IUnknown {
+  virtual HRESULT STDMETHODCALLTYPE SetRasterizationRateMap(UINT64 map) = 0;
+};
 struct IDXMTNativeDevice : public IUnknown {
   virtual HRESULT STDMETHODCALLTYPE ImportSharedTexture(
       const char *bootstrap_name, const D3D11_TEXTURE2D_DESC *desc,
