@@ -232,6 +232,8 @@ struct context {
   uint32_t pso_sample_mask;
   microsoft::D3D10_SB_TOKENIZED_PROGRAM_TYPE shader_type;
   SM50_SHADER_METAL_VERSION metal_version;
+  // Pixel stage only: forward tables of the map whose layout sampled targets use.
+  uint32_t rate_map_read_argument = ~0u;
 };
 
 template <typename S> IRValue make_irvalue(S &&fs) {

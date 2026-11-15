@@ -16,7 +16,7 @@ getGlobalShaderFlag() {
   std::call_once(get_shader_flag_once, []() {
     shader_flag = {};
     if (env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1")
-      shader_flag |= SM50_SHADER_FLAG_RATE_MAP_POSITION;
+      shader_flag |= SM50_SHADER_FLAG_RATE_MAP_POSITION | SM50_SHADER_FLAG_RATE_MAP_READ;
     if (Config::getInstance().getOption<bool>("d3d11.sampleNaNToZero", false))
       shader_flag |= SM50_SHADER_FLAG_SAMPLE_NAN_TO_ZERO;
     if (Config::getInstance().getOption<bool>("d3d11.defuseFma", false))

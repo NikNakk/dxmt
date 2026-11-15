@@ -284,6 +284,8 @@ public:
 
   // Encode-thread-only state. Render passes retain immutable snapshots.
   WMT::Reference<WMT::Object> rasterization_rate_map;
+  // Set while the contents are in a rate map's physical layout (DXMT_RATE_MAP_READ).
+  WMT::Reference<WMT::Buffer> rate_map_layout;
   TextureViewKey fullView;
 
   Rc<TextureAllocation> allocate(Flags<TextureAllocationFlag> flags);

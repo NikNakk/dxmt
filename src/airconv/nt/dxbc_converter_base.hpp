@@ -459,8 +459,16 @@ public:
 
   llvm::Value *
   DecodeTextureArrayLength(llvm::Value *Metadata) {
-    return ir.CreateTrunc(ir.CreateLShr(Metadata, 32uLL), air.getIntTy());
+    // The top bit marks a target whose contents are in a rate map's physical layout.
+    return ir.CreateAnd(ir.CreateTrunc(ir.CreateLShr(Metadata, 32uLL), air.getIntTy()), 0x7fffffffu);
   }
+
+  /* Reads of render targets left in rasterization-rate-map layout */
+  llvm::Value *RateMapMapped(llvm::Value *Metadata);
+  llvm::Value *RateMapPhysical(llvm::Value *Logical, bool Normalized);
+  llvm::Value *RateMapBranch(llvm::Value *Original, llvm::Value *Metadata, bool Normalized);
+  llvm::Value *RateMapTexel(llvm::Value *Address, llvm::Value *Metadata);
+  llvm::Value *RateMapCoord(llvm::Value *Coord, llvm::Value *Metadata);
 
   llvm::Value *
   DecodeRawBufferByteLength(llvm::Value *Metadata) {
