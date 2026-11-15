@@ -468,6 +468,11 @@ struct unixcall_rate_map_inverse_positions {
   struct WMTSize logical_size;
 };
 
+struct unixcall_base_foveation {
+  obj_handle_t device, pipeline;
+  uint32_t width, height;
+  struct WMTBaseFoveation result;
+};
 #pragma pack(pop)
 
 #endif

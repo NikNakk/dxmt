@@ -185,6 +185,9 @@ struct RenderEncoderStencilAttachmentData {
 };
 
 struct RenderEncoderData : EncoderData {
+  Rc<Texture> base_foveation_target;
+  uint64_t base_foveation_view=0;
+
   WMT::Reference<WMT::Object> rasterization_rate_map;
   WMT::Reference<WMT::Buffer> rate_map_positions;
   WMTSize rate_map_logical_size={};
@@ -217,6 +220,9 @@ struct RenderEncoderData : EncoderData {
 };
 
 struct ComputeEncoderData : EncoderData {
+  WMT::Reference<WMT::Buffer> base_foveation_forward;
+  WMT::Reference<WMT::ComputePipelineState> base_foveation_pipeline;
+
   wmtcmd_compute_nop cmd_head;
   wmtcmd_base *cmd_tail;
   WMT::Buffer allocated_argbuf;
@@ -705,6 +711,13 @@ public:
   WMT::Reference<WMT::Object> rasterization_rate_map;
   WMT::Reference<WMT::Buffer> rate_map_positions;
   WMTSize rate_map_logical_size={};
+
+  WMT::Reference<WMT::Object> base_foveation_map;
+  WMT::Reference<WMT::Buffer> base_foveation_forward, base_foveation_inverse;
+  WMT::Reference<WMT::ComputePipelineState> base_foveation_pipeline;
+  Rc<Texture> base_foveation_hidden;
+  WMTSize base_foveation_size={};
+  bool prepareBaseFoveation(unsigned width, unsigned height);
 
   RenderEncoderData *startRenderPass(
       uint8_t dsv_planar_flags, uint8_t dsv_readonly_flags, uint8_t render_target_count, uint64_t argument_buffer_size

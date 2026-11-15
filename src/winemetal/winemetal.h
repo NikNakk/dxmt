@@ -2183,4 +2183,9 @@ WINEMETAL_API obj_handle_t MTLDevice_retainRasterizationRateMapForSize(obj_handl
 
 WINEMETAL_API obj_handle_t MTLDevice_rateMapInversePositions(obj_handle_t device, obj_handle_t map, struct WMTSize *logical_size);
 
+// Private fixed-map experiment. All returned objects carry +1 ownership.
+struct WMTBaseFoveation { obj_handle_t map, forward, pipeline; struct WMTSize physical_size; };
+WINEMETAL_API void MTLDevice_newBaseFoveation(obj_handle_t device, uint32_t width, uint32_t height,
+    obj_handle_t pipeline, struct WMTBaseFoveation *result);
+
 #endif

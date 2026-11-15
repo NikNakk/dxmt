@@ -4538,12 +4538,42 @@ public:
         uav_only = true;
       }
 
+      // Explicitly selected experimental profile; no global target-size heuristic.
+      static const auto base_vs=env::getEnvVar("DXMT_BASE_FOVEATION_VS");
+      static const auto base_ps=env::getEnvVar("DXMT_BASE_FOVEATION_PS");
+      static const auto base_size=env::getEnvVar("DXMT_BASE_FOVEATION_SIZE");
+      static const bool base_enabled=env::getEnvVar("DXMT_BASE_FOVEATION")=="1" &&
+          env::getEnvVar("DXMT_RATE_MAP_POSITION")=="1" && base_vs.size()==40 && base_ps.size()==40;
+      bool base_candidate=false;
+      if(base_enabled && GetType()==D3D11_DEVICE_CONTEXT_IMMEDIATE && effective_render_target==1 && rtvs.size()==1 && !dsv_info.Texture &&
+          sample_count==1 && render_target_array<=1 && rtvs[0].PixelFormat==WMTPixelFormatRGBA8Unorm &&
+          rtvs[0].Texture->miplevelCount()==1 && rtvs[0].Texture->arrayLength()==1 &&
+          rtvs[0].Texture->textureType()==WMTTextureType2D &&
+          (rtvs[0].Texture->usage()&WMTTextureUsageShaderWrite) &&
+          !state_.OutputMerger.UAVs.any_bound() && !state_.StreamOutput.Targets.any_bound() &&
+          !GetManagedShader<PipelineStage::Geometry>() && !GetManagedShader<PipelineStage::Hull>() &&
+          !GetManagedShader<PipelineStage::Domain>() && state_.Rasterizer.NumViewports==1 &&
+          base_size==str::format(render_target_width,"x",render_target_height)) {
+        auto vs=GetManagedShader<PipelineStage::Vertex>();auto ps=GetManagedShader<PipelineStage::Pixel>();
+        auto viewport=state_.Rasterizer.viewports[0];
+        auto rs=state_.Rasterizer.RasterizerState ? state_.Rasterizer.RasterizerState : default_rasterizer_state;
+        auto bs=state_.OutputMerger.BlendState ? state_.OutputMerger.BlendState : default_blend_state;
+        D3D11_BLEND_DESC1 blend={};bs->GetDesc1(&blend);
+        base_candidate=vs && ps && vs->sha1().string()==base_vs && ps->sha1().string()==base_ps &&
+            !vs->reflection().UAVSlotMask && !ps->reflection().UAVSlotMask &&
+            !rs->IsScissorEnabled() && !blend.AlphaToCoverageEnable &&
+            !blend.RenderTarget[0].BlendEnable && !blend.RenderTarget[0].LogicOpEnable &&
+            blend.RenderTarget[0].RenderTargetWriteMask==D3D11_COLOR_WRITE_ENABLE_ALL &&
+            viewport.TopLeftX==0 && viewport.TopLeftY==0 && viewport.Width==render_target_width &&
+            viewport.Height==render_target_height && viewport.MinDepth==0 && viewport.MaxDepth==1;
+      }
+
       auto allocated_encoder_argbuf_size = std::make_unique<uint64_t>(0);
       allocated_encoder_argbuf_size_ = allocated_encoder_argbuf_size.get();
 
       EmitST([rtvs = std::move(rtvs), dsv = std::move(dsv_info), effective_render_target, uav_only,
             render_target_height, render_target_width, sample_count,
-            render_target_array, encoder_argbuf_size = std::move(allocated_encoder_argbuf_size)](ArgumentEncodingContext &ctx) {
+            render_target_array, base_candidate, encoder_argbuf_size = std::move(allocated_encoder_argbuf_size)](ArgumentEncodingContext &ctx) {
         auto pool = WMT::MakeAutoreleasePool();
         uint32_t dsv_planar_flags = DepthStencilPlanarFlags(dsv.PixelFormat);
         auto& info = *ctx.startRenderPass(dsv_planar_flags, dsv.ReadOnlyFlags, rtvs.size(), *encoder_argbuf_size.get());
@@ -4558,6 +4588,7 @@ public:
           // the map. Shadow/UI/unrelated targets remain ordinary render passes.
           if (rtvs.size() == 1 && !dsv.Texture && rtv.Texture->rasterization_rate_map)
             info.rasterization_rate_map = rtv.Texture->rasterization_rate_map;
+          if(base_candidate) { info.base_foveation_target=rtv.Texture;info.base_foveation_view=rtv.viewId; }
           color.depth_plane = rtv.DepthPlane;
           color.load_action = WMTLoadActionLoad;
           color.store_action = WMTStoreActionStore;

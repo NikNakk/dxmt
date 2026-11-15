@@ -81,6 +81,61 @@ _MTLDevice_rateMapInversePositions(void *args) {
   return STATUS_SUCCESS;
 }
 
+// Bounded fixed-centre prototype; reuse the existing map/position transport.
+static NTSTATUS
+_MTLDevice_newBaseFoveation(void *args) {
+  struct unixcall_base_foveation *p=args;
+  p->result=(struct WMTBaseFoveation){0};
+  @autoreleasepool {
+    id<MTLDevice> device=(id<MTLDevice>)p->device;
+    if(!p->width || !p->height || p->width>8192 || p->height>8192 ||
+        ![device supportsRasterizationRateMapWithLayerCount:1]) return STATUS_SUCCESS;
+    MTLRasterizationRateLayerDescriptor *layer=[[MTLRasterizationRateLayerDescriptor alloc]
+        initWithSampleCount:MTLSizeMake(8,8,1)];
+    for(unsigned i=0;i<8;++i) {
+      layer.horizontal[i]=@((i==3 || i==4)?1.f:.25f);
+      layer.vertical[i]=@((i==3 || i==4)?1.f:.25f);
+    }
+    MTLRasterizationRateMapDescriptor *desc=[MTLRasterizationRateMapDescriptor
+        rasterizationRateMapDescriptorWithScreenSize:MTLSizeMake(p->width,p->height,1) layer:layer];
+    id<MTLRasterizationRateMap> map=[device newRasterizationRateMapWithDescriptor:desc];
+    [layer release];
+    if(!map) return STATUS_SUCCESS;
+    MTLSize physical=[map physicalSizeForLayer:0];
+    if(!physical.width || !physical.height || physical.width>p->width || physical.height>p->height) {
+      [map release];return STATUS_SUCCESS;
+    }
+    id<MTLBuffer> xy=[device newBufferWithLength:(p->width+p->height)*sizeof(float) options:MTLResourceStorageModeShared];
+    id<MTLComputePipelineState> pipeline=[(id)p->pipeline retain];
+    if(!pipeline) {
+      NSString *source=@"#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void unwarp(texture2d<float,access::sample> src [[texture(0)]],"
+        "texture2d<float,access::write> dst [[texture(1)]],constant float *xy [[buffer(0)]],"
+        "uint2 i [[thread_position_in_grid]]) { if(any(i>=uint2(dst.get_width(),dst.get_height()))) return;"
+        "constexpr sampler s(coord::pixel,filter::linear,address::clamp_to_edge);"
+        "dst.write(src.sample(s,float2(xy[i.x],xy[dst.get_width()+i.y])),i); }";
+      NSError *error=nil;
+      id<MTLLibrary> library=[device newLibraryWithSource:source options:nil error:&error];
+      id<MTLFunction> function=[library newFunctionWithName:@"unwarp"];
+      if(function) pipeline=[device newComputePipelineStateWithFunction:function error:&error];
+      [function release];[library release];
+    }
+    if(!xy || !pipeline) { [xy release];[pipeline release];[map release];return STATUS_SUCCESS; }
+    float *values=xy.contents;
+    for(unsigned i=0;i<p->width;++i) {
+      float x=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(i+.5f,.5f) forLayer:0].x;
+      values[i]=fminf(fmaxf(x,.5f),physical.width-.5f);
+    }
+    for(unsigned i=0;i<p->height;++i) {
+      float y=[map mapScreenToPhysicalCoordinates:MTLCoordinate2DMake(.5f,i+.5f) forLayer:0].y;
+      values[p->width+i]=fminf(fmaxf(y,.5f),physical.height-.5f);
+    }
+    p->result.map=(obj_handle_t)map;p->result.forward=(obj_handle_t)xy;p->result.pipeline=(obj_handle_t)pipeline;
+    p->result.physical_size=(struct WMTSize){physical.width,physical.height,1};
+  }
+  return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 _NSObject_retain(NSObject **obj) {
   [*obj retain];
@@ -3825,6 +3880,7 @@ const void *__wine_unix_call_funcs[] = {
     &_WMTSetRemoteLayerFrame,
     &_MTLDevice_retainRasterizationRateMap,
     &_MTLDevice_rateMapInversePositions,
+    &_MTLDevice_newBaseFoveation,
 };
 
 #ifndef DXMT_NATIVE
@@ -3986,5 +4042,6 @@ const void *__wine_unix_call_wow64_funcs[] = {
     &_WMTSetRemoteLayerFrame,
     &_MTLDevice_retainRasterizationRateMap,
     &_MTLDevice_rateMapInversePositions,
+    &_MTLDevice_newBaseFoveation,
 };
 #endif
