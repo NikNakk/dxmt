@@ -15,3 +15,13 @@ struct IDXMTReplayProbe : IUnknown {
   // seed attachments and mutable inputs immediately before the ordinary draw.
   virtual HRESULT STDMETHODCALLTYPE CaptureNextDraw(UINT64 budget_bytes, IDXMTReplayPacket **packet) = 0;
 };
+
+// Separate versioned interface: old diagnostic vtables are unchanged.
+static const GUID DXMT_IID_REPLAY_PASS_PROBE = {0x0ad9c422,0x137b,0x48ab,{0xb4,0x12,0x62,0x9c,0xe7,0x11,0x2a,0x70}};
+struct IDXMTReplayPassProbe : IUnknown {
+  // Explicit owner-thread scope, 1..16 Draw/DrawIndexed calls, same RTV/DSV
+  // objects. Mutable input updates are snapshotted at each draw. Operations
+  // outside the bounded contract fail the packet; ordinary rendering continues.
+  virtual HRESULT STDMETHODCALLTYPE BeginPassCapture(UINT64 budget_bytes, UINT max_draws, IDXMTReplayPacket **packet) = 0;
+  virtual HRESULT STDMETHODCALLTYPE EndPassCapture() = 0;
+};
