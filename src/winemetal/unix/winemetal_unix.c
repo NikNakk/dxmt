@@ -14,6 +14,7 @@
 #define WINEMETAL_API
 #include "../winemetal_thunks.h"
 #include "../airconv_thunks.h"
+#include "winemetal_fixed_psvr2_profile.h"
 
 typedef int NTSTATUS;
 #define STATUS_SUCCESS 0
@@ -111,11 +112,19 @@ _MTLDevice_newStereoRateMap(void *args) {
     if(!p->width || !p->height || p->width>16384 || p->height>16384 || p->rate_percent<10 || p->rate_percent>100 ||
         ![device supportsRasterizationRateMapWithLayerCount:1]) return STATUS_SUCCESS;
     float outer=p->rate_percent/100.f;
-    // Sixteen columns: eight per eye, the middle two of each at full rate. Eight rows.
+    // Explicit headset profile; the generic fixed prototype remains the default.
+    const char *profile=getenv("DXMT_STAY_WARPED_FIXED_PROFILE");
+    bool psvr2=profile && !strcmp(profile,"psvr2");
+    unsigned columns=psvr2 ? 2*WMT_FIXED_PSVR2_COLUMNS_PER_EYE : 16;
+    unsigned rows=psvr2 ? WMT_FIXED_PSVR2_ROWS : 8;
     MTLRasterizationRateLayerDescriptor *layer=[[MTLRasterizationRateLayerDescriptor alloc]
-        initWithSampleCount:MTLSizeMake(16,8,1)];
-    for(unsigned i=0;i<16;++i) layer.horizontal[i]=@(((i&7)==3 || (i&7)==4)?1.f:outer);
-    for(unsigned i=0;i<8;++i) layer.vertical[i]=@((i==3 || i==4)?1.f:outer);
+        initWithSampleCount:MTLSizeMake(columns,rows,1)];
+    for(unsigned i=0;i<columns;++i)
+      layer.horizontal[i]=@(psvr2 ? wmt_fixed_psvr2_horizontal(i,outer) :
+                            (((i&7)==3 || (i&7)==4)?1.f:outer));
+    for(unsigned i=0;i<rows;++i)
+      layer.vertical[i]=@(psvr2 ? wmt_fixed_psvr2_vertical(i,outer) :
+                          ((i==3 || i==4)?1.f:outer));
     MTLRasterizationRateMapDescriptor *desc=[MTLRasterizationRateMapDescriptor
         rasterizationRateMapDescriptorWithScreenSize:MTLSizeMake(p->width,p->height,1) layer:layer];
     id<MTLRasterizationRateMap> map=[device newRasterizationRateMapWithDescriptor:desc];
