@@ -466,6 +466,32 @@ struct linear_texture_desc {
   uint bytes_per_image;
 };
 
+struct rate_map_unwarp_desc {
+  float2 src_origin;
+  float2 dst_origin;
+};
+
+// tables: physical size, logical size, inverse x/y, then the forward x and y tables
+// (physical coordinate of each logical pixel boundary), as winemetal's rate-map buffer.
+[[fragment]] float4 fs_rate_map_unwarp(
+  present_data input [[stage_in]],
+  texture2d<float, access::sample> source [[texture(0)]],
+  device float* tables [[buffer(kCustomBufferArgumentIndex0)]],
+  constant rate_map_unwarp_desc& desc [[buffer(kCustomBufferArgumentIndex1)]]
+) {
+  constexpr sampler linear_pixel(coord::pixel, filter::linear, address::clamp_to_edge);
+  float2 physical = float2(tables[0], tables[1]);
+  float2 logical = float2(tables[2], tables[3]);
+  device float* forward_x = tables + 4 + uint(physical.x) + uint(physical.y);
+  device float* forward_y = forward_x + uint(logical.x) + 1;
+  float2 p = clamp(input.position.xy - desc.dst_origin + desc.src_origin, float2(0), logical);
+  float2 cell = min(floor(p), logical - 1);
+  float2 f = p - cell;
+  float2 q = float2(mix(forward_x[uint(cell.x)], forward_x[uint(cell.x) + 1], f.x),
+                    mix(forward_y[uint(cell.y)], forward_y[uint(cell.y) + 1], f.y));
+  return source.sample(linear_pixel, clamp(q, float2(0.5), physical - 0.5));
+}
+
 [[fragment]] depth_stencil_out fs_copy_from_buffer_d32s8(
   present_data input [[stage_in]],
   device char* buffer [[buffer(kCustomBufferArgumentIndex0)]],

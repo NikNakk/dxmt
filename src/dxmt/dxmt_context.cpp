@@ -39,6 +39,7 @@ ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Devic
     emulated_cmd(device, lib, *this),
     clear_rt_cmd(device, *this),
     blit_depth_stencil_cmd(device, lib, *this),
+    rate_map_unwarp_cmd(device, lib, *this),
     clear_uav_cmd(device, *this),
     mv_scale_cmd(device, lib, *this),
     tile_barrier_cmd(device, lib, *this),

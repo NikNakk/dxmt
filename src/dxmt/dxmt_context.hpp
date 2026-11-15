@@ -929,6 +929,7 @@ public:
   EmulatedCommandContext emulated_cmd;
   ClearRTV<ArgumentEncodingContext> clear_rt_cmd;
   DepthStencilBlitContext blit_depth_stencil_cmd;
+  RateMapUnwarpContext rate_map_unwarp_cmd;
   ClearUAV<ArgumentEncodingContext> clear_uav_cmd;
   MTLFXMVScaleContext mv_scale_cmd;
   TileBarrierContext tile_barrier_cmd;

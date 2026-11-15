@@ -157,6 +157,143 @@ DepthStencilBlitContext::DepthStencilBlitContext(
   pso_copy_to_buffer_d32s8_ = device_.newComputePipelineState(cs_copy_d32s8, err);
 }
 
+RateMapUnwarpContext::RateMapUnwarpContext(WMT::Device device, InternalCommandLibrary &lib, ArgumentEncodingContext &ctx) :
+    ctx_(ctx),
+    device_(device) {
+  auto library = lib.getLibrary();
+  vs_ = library.newFunction("vs_present_quad");
+  fs_ = library.newFunction("fs_rate_map_unwarp");
+}
+
+bool
+RateMapUnwarpContext::supports(WMTPixelFormat format) {
+  switch (Forget_sRGB(format)) {
+  case WMTPixelFormatRGBA8Unorm:
+  case WMTPixelFormatBGRA8Unorm:
+  case WMTPixelFormatRGB10A2Unorm:
+  case WMTPixelFormatRGBA16Float:
+  case WMTPixelFormatRG11B10Float:
+    return true;
+  default:
+    return false;
+  }
+}
+
+struct rate_map_unwarp_desc {
+  float src_origin[2];
+  float dst_origin[2];
+};
+
+bool
+RateMapUnwarpContext::copy(
+    const Rc<Texture> &src, uint32_t src_level, uint32_t src_slice, WMTOrigin src_origin, WMTSize size,
+    const Rc<Texture> &dst, uint32_t dst_level, uint32_t dst_slice, WMTOrigin dst_origin
+) {
+  auto format = dst->pixelFormat();
+  if (!fs_ || !src->rate_map_layout || src->sampleCount() != 1 || dst->sampleCount() != 1 || src_level || !supports(format) ||
+      Forget_sRGB(src->pixelFormat()) != Forget_sRGB(format)) {
+    static bool logged;
+    if (!std::exchange(logged, true))
+      WARN("Rate-map copy refused: function=", unsigned(bool(fs_)), " samples=", src->sampleCount(), "/", dst->sampleCount(),
+           " level=", src_level, " formats=", unsigned(src->pixelFormat()), "/", unsigned(format));
+    return false;
+  }
+  if (!pso_cache_.contains(format)) {
+    WMT::Reference<WMT::Error> err;
+    WMTRenderPipelineInfo pipeline_info;
+    WMT::InitializeRenderPipelineInfo(pipeline_info);
+    pipeline_info.vertex_function = vs_;
+    pipeline_info.fragment_function = fs_;
+    pipeline_info.colors[0].pixel_format = format;
+    pipeline_info.rasterization_enabled = true;
+    pipeline_info.input_primitive_topology = WMTPrimitiveTopologyClassTriangle;
+    pso_cache_.emplace(format, device_.newRenderPipelineState(pipeline_info, err));
+  }
+  WMT::RenderPipelineState pso = pso_cache_.at(format);
+  if (!pso) {
+    static bool logged;
+    if (!std::exchange(logged, true))
+      WARN("Rate-map copy refused: no pipeline for format ", unsigned(format));
+    return false;
+  }
+
+  // Both views use the destination's format, so bytes are preserved across an sRGB pair.
+  TextureViewDescriptor view_desc;
+  view_desc.type = WMTTextureType2D;
+  view_desc.format = format;
+  view_desc.firstMiplevel = 0;
+  view_desc.miplevelCount = 1;
+  view_desc.firstArraySlice = src_slice;
+  view_desc.arraySize = 1;
+  auto src_view = src->createView(view_desc);
+  view_desc.firstMiplevel = dst_level;
+  view_desc.firstArraySlice = dst_slice;
+  auto dst_view = dst->createView(view_desc);
+
+  auto &pass_info = *ctx_.startRenderPass(0, 0, 1, 0);
+  // Never a mapped pass; the reference keeps the layout tables alive until it is encoded.
+  pass_info.rasterization_rate_map = {};
+  pass_info.rate_map_excluded = true;
+  pass_info.rate_map_positions = src->rate_map_layout;
+  auto &color = pass_info.colors[0];
+  color.attachment = ctx_.access<PipelineStage::Pixel>(dst, dst_view, ResourceAccess::Write);
+  color.depth_plane = 0;
+  color.load_action = WMTLoadActionLoad;
+  color.store_action = WMTStoreActionStore;
+  pass_info.tile_barrier_pso_key.color_formats[0] = format;
+  auto width = dst->width(dst_view), height = dst->height(dst_view);
+  pass_info.render_target_width = width;
+  pass_info.render_target_height = height;
+  pass_info.render_target_array_length = 0;
+  pass_info.default_raster_sample_count = 1;
+  auto source = ctx_.access<PipelineStage::Pixel>(src, src_view, ResourceAccess::Read).texture;
+
+  auto &setpso = ctx_.encodeRenderCommand<wmtcmd_render_setpso>();
+  setpso.type = WMTRenderCommandSetPSO;
+  setpso.pso = pso;
+
+  auto &setvp = ctx_.encodeRenderCommand<wmtcmd_render_setviewport>();
+  setvp.type = WMTRenderCommandSetViewport;
+  setvp.viewport = {0.0, 0.0, (double)width, (double)height, 0.0, 1.0};
+
+  auto &setscissor = ctx_.encodeRenderCommand<wmtcmd_render_setscissorrect>();
+  setscissor.type = WMTRenderCommandSetScissorRect;
+  setscissor.scissor_rect = {dst_origin.x, dst_origin.y, std::min<uint64_t>(size.width, width - dst_origin.x),
+                             std::min<uint64_t>(size.height, height - dst_origin.y)};
+
+  auto &settex = ctx_.encodeRenderCommand<wmtcmd_render_settexture>();
+  settex.type = WMTRenderCommandSetFragmentTexture;
+  settex.texture = source;
+  settex.index = 0;
+
+  auto &setbuf = ctx_.encodeRenderCommand<wmtcmd_render_setbuffer>();
+  setbuf.type = WMTRenderCommandSetFragmentBuffer;
+  setbuf.buffer = src->rate_map_layout.handle;
+  setbuf.index = kCustomBufferArgumentIndex0;
+  setbuf.offset = 0;
+
+  rate_map_unwarp_desc desc{{float(src_origin.x), float(src_origin.y)}, {float(dst_origin.x), float(dst_origin.y)}};
+  auto &setdesc = ctx_.encodeRenderCommand<wmtcmd_render_setbytes>();
+  setdesc.type = WMTRenderCommandSetFragmentBytes;
+  void *temp = ctx_.allocate_cpu_heap(sizeof(desc), 16);
+  memcpy(temp, &desc, sizeof(desc));
+  setdesc.bytes.set(temp);
+  setdesc.length = sizeof(desc);
+  setdesc.index = kCustomBufferArgumentIndex1;
+
+  auto &draw = ctx_.encodeRenderCommand<wmtcmd_render_draw>();
+  draw.type = WMTRenderCommandDraw;
+  draw.primitive_type = WMTPrimitiveTypeTriangle;
+  draw.vertex_start = 0;
+  draw.vertex_count = 3;
+  draw.base_instance = 0;
+  draw.instance_count = 1;
+
+  ctx_.endPass();
+  dst->rate_map_layout = {};
+  return true;
+}
+
 struct linear_texture_desc {
   uint32_t bytes_per_row;
   uint32_t bytes_per_image;
