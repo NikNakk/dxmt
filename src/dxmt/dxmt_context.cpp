@@ -359,8 +359,13 @@ ArgumentEncodingContext::encodeShaderResources(
         } else if (srv.texture.ptr()) {
           assert(arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_MINLOD_CLAMP);
           auto viewIdChecked = srv.texture->checkViewUseArray(srv.viewId, arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY);
-          encoded_buffer[arg.StructurePtrOffset] =
-              access<stage>(srv.texture, viewIdChecked, ResourceAccess::Read).gpuResourceID;
+          auto &bound_view = access<stage>(srv.texture, viewIdChecked, ResourceAccess::Read);
+          encoded_buffer[arg.StructurePtrOffset] = bound_view.gpuResourceID;
+          if (tbdr_audit.active && stage == PipelineStage::Pixel && tbdrAuditDetailRow())
+            tbdrAuditLog("srv encoder=%llu frame=%llu stage=%u slot=%u resource=%p allocation=%p native=%llx view=%u",
+              (unsigned long long)currentRenderEncoder()->id, (unsigned long long)currentFrameId(),
+              unsigned(stage), unsigned(arg.SM50BindingSlot), srv.texture.ptr(), bound_view.allocation,
+              (unsigned long long)bound_view.texture.handle, unsigned(viewIdChecked));
           encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(srv.texture->arrayLength(viewIdChecked), 0);
           makeResident<stage, kind>(srv.texture.ptr(), viewIdChecked);
         } else {

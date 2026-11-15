@@ -4897,6 +4897,21 @@ public:
     InitializeGraphicsPipelineDesc<IndexedDraw>(pipelineDesc);
 
     device->CreateGraphicsPipeline(&pipelineDesc, &pipeline);
+    if (tbdrAuditEnabled() && tbdrAuditDetail()) {
+      auto vs = pipelineDesc.VertexShader ? pipelineDesc.VertexShader->sha1().string() : "none";
+      auto ps = pipelineDesc.PixelShader ? pipelineDesc.PixelShader->sha1().string() : "none";
+      D3D11_DEPTH_STENCIL_DESC depth = {};
+      (state_.OutputMerger.DepthStencilState ? state_.OutputMerger.DepthStencilState : default_depth_stencil_state)->GetDesc(&depth);
+      EmitST([vs, ps, depth, colors=pipelineDesc.NumColorAttachments, samples=pipelineDesc.SampleCount,
+              format=pipelineDesc.DepthStencilFormat, sample_mask=pipelineDesc.SampleMask](ArgumentEncodingContext& enc) {
+        if (enc.tbdr_audit.active && tbdrAuditDetailRow())
+          tbdrAuditLog("pipeline encoder=%llu frame=%llu vs=%s ps=%s colors=%u samples=%u depth_format=%u depth_enable=%u depth_write=%u depth_func=%u stencil_enable=%u stencil_write=%u sample_mask=%u",
+            (unsigned long long)enc.currentRenderEncoder()->id, (unsigned long long)enc.currentFrameId(),
+            vs.c_str(), ps.c_str(), colors, samples, unsigned(format), unsigned(depth.DepthEnable),
+            unsigned(depth.DepthWriteMask), unsigned(depth.DepthFunc), unsigned(depth.StencilEnable),
+            unsigned(depth.StencilWriteMask), sample_mask);
+      });
+    }
     EmitST([pso = std::move(pipeline)](ArgumentEncodingContext& enc) {
       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
       pso->GetPipeline(&GraphicsPipeline); // may block

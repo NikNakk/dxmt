@@ -10,6 +10,7 @@
 #include "../d3d10/d3d10_shader.hpp"
 #include "../d3d10/d3d10_input_layout.hpp"
 #include <cstring>
+#include "dxmt_tbdr_audit.hpp"
 #include <shared_mutex>
 
 namespace dxmt {
@@ -207,6 +208,7 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
 
   std::unordered_map<MTL_GRAPHICS_PIPELINE_DESC, std::unique_ptr<MTLCompiledGraphicsPipeline>> pipelines_;
   dxmt::mutex mutex_;
+  uint64_t dumped_bytes_ = 0; // diagnostic budget, protected by mutex_shares
 
   std::unordered_map<MTL_GRAPHICS_PIPELINE_DESC, std::unique_ptr<MTLCompiledGeometryPipeline>> pipelines_gs_;
   dxmt::mutex mutex_gs_;
@@ -247,6 +249,19 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
       shader->bytecode_length = BytecodeLength;
       memcpy(shader->bytecode, pBytecode, BytecodeLength);
 #endif
+      // Explicit private diagnostic only: retain original DXBC without changing shaders.
+      static const auto dump_dir = env::getEnvVar("DXMT_TBDR_SHADER_DUMP");
+      if (tbdrAuditEnabled() && !dump_dir.empty() && BytecodeLength <= 1024 * 1024 &&
+          dumped_bytes_ + BytecodeLength <= 64 * 1024 * 1024) {
+        auto path = dump_dir + "/" + sha1.string() + ".dxbc";
+        if (auto file = std::fopen(path.c_str(), "wb")) {
+          auto bytes = std::fwrite(pBytecode, 1, BytecodeLength, file);
+          std::fclose(file);
+          dumped_bytes_ += bytes;
+          tbdrAuditLog("shader_dump sha1=%s bytes=%u written=%llu", sha1.string().c_str(),
+                       BytecodeLength, (unsigned long long)bytes);
+        }
+      }
       return shaders_.emplace(sha1, std::move(shader)).first->second.get();
     }
   }
